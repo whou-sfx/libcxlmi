@@ -3090,7 +3090,7 @@ CXLMI_EXPORT int cxlmi_cmd_fmapi_get_multiheaded_info(struct cxlmi_endpoint *ep,
 	struct cxlmi_cmd_fmapi_get_multiheaded_info_rsp *rsp_pl;
 	_cleanup_free_ struct cxlmi_cci_msg *req = NULL;
 	_cleanup_free_ struct cxlmi_cci_msg *rsp = NULL;
-	ssize_t req_sz, rsp_sz;
+	ssize_t req_sz, rsp_sz, min_rsp_sz;
 	int rc = -1;
 
 	CXLMI_BUILD_BUG_ON(sizeof(*in) != 2);
@@ -3112,7 +3112,9 @@ CXLMI_EXPORT int cxlmi_cmd_fmapi_get_multiheaded_info(struct cxlmi_endpoint *ep,
 	if (!rsp)
 		return -1;
 
-	rc = send_cmd_cci(ep, ti, req, req_sz, rsp, rsp_sz, rsp_sz);
+	/* ld_map_list_limit only sets max returned. Min returned should be 1 */
+	min_rsp_sz = sizeof(*rsp_pl) + sizeof(*rsp) + sizeof(*rsp_pl->ld_map);
+	rc = send_cmd_cci(ep, ti, req, req_sz, rsp, rsp_sz, min_rsp_sz);
 	if (rc)
 		return rc;
 
