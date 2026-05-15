@@ -82,7 +82,7 @@ struct cxlmi_cmd_get_event_records_req {
 } __attribute__((packed));
 
 struct cxlmi_cmd_get_event_records_rsp {
-	uint8_t flags;
+	uint8_t flags;    /*bit0 over flow, bit 1 moreEvents*/
 	uint8_t reserved1;
 	uint16_t overflow_err_count;
 	uint64_t first_overflow_timestamp;

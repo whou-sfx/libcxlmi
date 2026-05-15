@@ -17,6 +17,10 @@
  */
 #define MAX_EVENT_RECORDS 64
 
+/* rsp->flags bit definitions (CXL r3.1 Section 8.2.9.2.2) */
+#define RSP_FLAG_OVERFLOW    (1 << 0)   /* event overflow occurred */
+#define RSP_FLAG_MORE_EVENTS (1 << 1)   /* more records available, re-issue */
+
 static const struct {
 	const char *name;
 	uint8_t value;
@@ -50,8 +54,9 @@ int cmd_get_event_records(struct cxlmi_endpoint *ep, int argc, char **argv)
 	struct cxlmi_cmd_get_event_records_req req = { 0 };
 	struct cxlmi_cmd_get_event_records_rsp *rsp;
 	const char *log_name = NULL;
-	uint16_t i;
-	int rc;
+	size_t rsp_sz;
+	uint32_t round = 0;
+	int rc = 0;
 
 	for (int a = 1; a < argc; a++) {
 		if (strcmp(argv[a], "--log") == 0 && a + 1 < argc)
@@ -70,66 +75,82 @@ int cmd_get_event_records(struct cxlmi_endpoint *ep, int argc, char **argv)
 	if (parse_event_log(log_name, &req.event_log) != 0)
 		return -1;
 
-	rsp = calloc(1, sizeof(*rsp) +
-		     MAX_EVENT_RECORDS * sizeof(rsp->records[0]));
+	rsp_sz = sizeof(*rsp) + MAX_EVENT_RECORDS * sizeof(rsp->records[0]);
+	rsp = calloc(1, rsp_sz);
 	if (!rsp) {
 		fprintf(stderr, "out of memory\n");
 		return -1;
 	}
 
-	rc = cxlmi_cmd_get_event_records(ep, NULL, &req, rsp);
-	if (rc) {
-		if (rc > 0)
-			fprintf(stderr, "get-event-records failed: %s\n",
-				cxlmi_cmd_retcode_tostr(rc));
-		else
-			fprintf(stderr, "get-event-records ioctl failed\n");
-		goto out;
-	}
+	printf("Log: %s (%u)\n", log_name, req.event_log);
 
-	printf("Log:                   %s (%u)\n", log_name, req.event_log);
-	printf("Flags:                 0x%02x\n", rsp->flags);
-	printf("Overflow Error Count:  %u\n", rsp->overflow_err_count);
-	printf("First Overflow TS:     %llu\n",
-	       (unsigned long long)rsp->first_overflow_timestamp);
-	printf("Last Overflow TS:      %llu\n",
-	       (unsigned long long)rsp->last_overflow_timestamp);
-	printf("Record Count:          %u\n", rsp->record_count);
+	do {
+		uint16_t i;
+		uint16_t count;
 
-	if (rsp->record_count > MAX_EVENT_RECORDS) {
-		fprintf(stderr, "warning: record_count %u exceeds buffer limit %u, clamping\n",
-			rsp->record_count, MAX_EVENT_RECORDS);
-		rsp->record_count = MAX_EVENT_RECORDS;
-	}
-
-	for (i = 0; i < rsp->record_count; i++) {
-		const struct cxlmi_event_record *r = &rsp->records[i];
-		int j;
-
-		printf("\n  [Record %u]\n", i);
-		printf("    UUID:           ");
-		for (j = 0; j < 16; j++)
-			printf("%02x", r->uuid[j]);
-		printf("\n");
-		printf("    Handle:         0x%04x\n", r->handle);
-		printf("    Related Handle: 0x%04x\n", r->related_handle);
-		printf("    Timestamp:      %llu\n", (unsigned long long)r->timestamp);
-		printf("    Flags:          0x%02x 0x%02x 0x%02x\n",
-		       r->flags[0], r->flags[1], r->flags[2]);
-		printf("    Length:         %u\n", r->length);
-		printf("    MaintOpClass:   0x%02x  SubClass: 0x%02x\n",
-		       r->maint_op_class, r->maint_op_subclass);
-		printf("    LD ID:          %u  Head ID: %u\n", r->ld_id, r->head_id);
-		printf("    Data:           ");
-		for (j = 0; j < 0x50; j++) {
-			printf("%02x", r->data[j]);
-			if ((j + 1) % 16 == 0 && j + 1 < 0x50)
-				printf("\n                    ");
+		memset(rsp, 0, rsp_sz);
+		rc = cxlmi_cmd_get_event_records(ep, NULL, &req, rsp);
+		if (rc) {
+			if (rc > 0)
+				fprintf(stderr, "get-event-records failed: %s\n",
+					cxlmi_cmd_retcode_tostr(rc));
+			else
+				fprintf(stderr, "get-event-records ioctl failed\n");
+			break;
 		}
-		printf("\n");
-	}
 
-out:
+		printf("\n--- Round %u ---\n", round + 1);
+		printf("Flags:                 0x%02x [%s%s]\n",
+		       rsp->flags,
+		       (rsp->flags & RSP_FLAG_OVERFLOW)    ? "OVERFLOW "   : "",
+		       (rsp->flags & RSP_FLAG_MORE_EVENTS) ? "MORE_EVENTS" : "");
+		printf("Overflow Error Count:  %u\n", rsp->overflow_err_count);
+		printf("First Overflow TS:     %llu\n",
+		       (unsigned long long)rsp->first_overflow_timestamp);
+		printf("Last Overflow TS:      %llu\n",
+		       (unsigned long long)rsp->last_overflow_timestamp);
+
+		count = rsp->record_count;
+		if (count > MAX_EVENT_RECORDS) {
+			fprintf(stderr,
+				"warning: record_count %u exceeds buffer limit %u, clamping\n",
+				count, MAX_EVENT_RECORDS);
+			count = MAX_EVENT_RECORDS;
+		}
+		printf("Record Count:          %u\n", count);
+
+		for (i = 0; i < count; i++) {
+			const struct cxlmi_event_record *r = &rsp->records[i];
+			int j;
+
+			printf("\n  [Record %u]\n", i);
+			printf("    UUID:           ");
+			for (j = 0; j < 16; j++)
+				printf("%02x", r->uuid[j]);
+			printf("\n");
+			printf("    Handle:         0x%04x\n", r->handle);
+			printf("    Related Handle: 0x%04x\n", r->related_handle);
+			printf("    Timestamp:      %llu\n",
+			       (unsigned long long)r->timestamp);
+			printf("    Flags:          0x%02x 0x%02x 0x%02x\n",
+			       r->flags[0], r->flags[1], r->flags[2]);
+			printf("    Length:         %u\n", r->length);
+			printf("    MaintOpClass:   0x%02x  SubClass: 0x%02x\n",
+			       r->maint_op_class, r->maint_op_subclass);
+			printf("    LD ID:          %u  Head ID: %u\n",
+			       r->ld_id, r->head_id);
+			printf("    Data:           ");
+			for (j = 0; j < 0x50; j++) {
+				printf("%02x", r->data[j]);
+				if ((j + 1) % 16 == 0 && j + 1 < 0x50)
+					printf("\n                    ");
+			}
+			printf("\n");
+		}
+
+		round++;
+	} while (rsp->flags & RSP_FLAG_MORE_EVENTS);
+
 	free(rsp);
 	return rc;
 }
