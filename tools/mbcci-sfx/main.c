@@ -12,8 +12,16 @@
 #include "mbcci-sfx.h"
 
 static const struct subcmd subcmds[] = {
-	{ "identify", cmd_identify,
+	{ "identify",                  cmd_identify,
 	  "Send Memory Device Identify (4000h) to <memN>" },
+	{ "get-event-records",         cmd_get_event_records,
+	  "Get Event Records (0100h) --log <info|warn|failure|fatal|dcd>" },
+	{ "clear-event-records",       cmd_clear_event_records,
+	  "Clear Event Records (0101h) --log <log> [--all] [--handle <h>...]" },
+	{ "get-event-interrupt-policy",cmd_get_event_interrupt_policy,
+	  "Get Event Interrupt Policy (0102h)" },
+	{ "set-event-interrupt-policy",cmd_set_event_interrupt_policy,
+	  "Set Event Interrupt Policy (0103h) --info <h> --warn <h> --failure <h> --fatal <h>" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);

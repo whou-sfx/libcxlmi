@@ -7,6 +7,7 @@ executable(
     [
         'main.c',
         'cmd_identify.c',
+        'cmd_events.c',
     ],
     dependencies: libcxlmi_dep,
     include_directories: [inc]
