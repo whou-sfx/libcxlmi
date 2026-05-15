@@ -187,6 +187,7 @@ add_project_arguments(
 subdir('ccan')
 subdir('src')
 subdir('examples')
+subdir('tools')
 if get_option('tests')
     subdir('tests')
 endif
