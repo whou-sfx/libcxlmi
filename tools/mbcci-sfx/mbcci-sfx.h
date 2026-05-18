@@ -25,4 +25,6 @@ int cmd_clear_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_set_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+int cmd_vu_evtadd(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 #endif /* MBCCI_SFX_H */

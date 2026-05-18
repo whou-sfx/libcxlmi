@@ -8,6 +8,7 @@ executable(
         'main.c',
         'cmd_identify.c',
         'cmd_events.c',
+        'cmd_vu_evtadd.c',
     ],
     dependencies: libcxlmi_dep,
     include_directories: [inc]

@@ -9,3 +9,16 @@ int cxlmi_cmd_vendor_specific(struct cxlmi_endpoint *ep,
 			      void *in, size_t in_size,
 			      void *ret, size_t ret_size);
    ```
+
+
+## Vendor VU command (0xCC53)
+
+Input payload:
+typedef struct {
+    uint32_t vuid;
+    uint32_t stats;
+    uint32_t arg1;
+    uint32_t arg2;
+    uint32_t arg3;
+    uint32_t arg4;
+} VU_CMD_REQ_T;
