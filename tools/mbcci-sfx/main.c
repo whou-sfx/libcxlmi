@@ -24,6 +24,10 @@ static const struct subcmd subcmds[] = {
 	  "Set Event Interrupt Policy (0103h) --info <h> --warn <h> --failure <h> --fatal <h>" },
 	{ "vu-evtadd",                 cmd_vu_evtadd,
 	  "VU Inject Event (0xCC53/0x0129) --loglvl <0-3> --intfmask <hex> --count <n>" },
+	{ "get-supported-logs",        cmd_get_supported_logs,
+	  "Get Supported Logs (0400h)" },
+	{ "get-log",                   cmd_get_log,
+	  "Get Log (0401h) --uuid <hex32> [--offset <n>] [--length <n>]" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);
