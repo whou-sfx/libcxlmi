@@ -28,6 +28,8 @@ static const struct subcmd subcmds[] = {
 	  "Get Supported Logs (0400h)" },
 	{ "get-log",                   cmd_get_log,
 	  "Get Log (0401h) --uuid <hex32> [--offset <n>] [--length <n>]" },
+	{ "get-vendor-log",            cmd_get_vendor_log,
+	  "Fetch full Vendor Debug Log in 2K chunks -f <output_file>" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);

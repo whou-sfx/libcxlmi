@@ -10,6 +10,14 @@
 
 #include "mbcci-sfx.h"
 
+#define VENDOR_LOG_CHUNK  2048
+
+/* Vendor Debug Log UUID: 5e1819d9-11a9-400c-811f-d60719403d86 */
+static const uint8_t vendor_debug_log_uuid[16] = {
+	0x5e, 0x18, 0x19, 0xd9, 0x11, 0xa9, 0x40, 0x0c,
+	0x81, 0x1f, 0xd6, 0x07, 0x19, 0x40, 0x3d, 0x86
+};
+
 /* Known log UUIDs from CXL spec (Generic-Component-Commands.md). */
 struct uuid_name {
 	uint8_t     uuid[16];
@@ -265,5 +273,114 @@ int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv)
 	}
 
 	free(buf);
+	return 0;
+}
+
+int cmd_get_vendor_log(struct cxlmi_endpoint *ep, int argc, char **argv)
+{
+	struct cxlmi_cmd_get_supported_logs_rsp *srsp;
+	struct cxlmi_cmd_get_log_req req = { 0 };
+	const char *outfile = NULL;
+	uint32_t total_size = 0, offset = 0, chunk;
+	uint8_t *buf = NULL;
+	FILE *fp = NULL;
+	uint16_t i;
+	int rc = -1, a;
+
+	for (a = 1; a < argc; a++) {
+		if (strcmp(argv[a], "-f") == 0 && a + 1 < argc) {
+			outfile = argv[++a];
+		} else {
+			fprintf(stderr,
+				"Usage: get-vendor-log -f <output_file>\n");
+			return -1;
+		}
+	}
+
+	if (!outfile) {
+		fprintf(stderr,
+			"Usage: get-vendor-log -f <output_file>\n"
+			"  -f <file>  file to append vendor debug log into\n");
+		return -1;
+	}
+
+	/* Step 1: find Vendor Debug Log UUID and total size. */
+	srsp = fetch_supported_logs(ep);
+	if (!srsp) {
+		fprintf(stderr, "get-vendor-log: get-supported-logs failed\n");
+		return -1;
+	}
+	for (i = 0; i < srsp->num_supported_log_entries; i++) {
+		if (memcmp(srsp->entries[i].uuid, vendor_debug_log_uuid, 16) == 0) {
+			total_size = srsp->entries[i].log_size;
+			break;
+		}
+	}
+	free(srsp);
+
+	if (total_size == 0) {
+		fprintf(stderr,
+			"get-vendor-log: Vendor Debug Log not found on this device\n");
+		return -1;
+	}
+
+	/* Step 2: open output file in append mode. */
+	fp = fopen(outfile, "a");
+	if (!fp) {
+		perror("get-vendor-log: fopen");
+		return -1;
+	}
+
+	buf = malloc(VENDOR_LOG_CHUNK);
+	if (!buf) {
+		fprintf(stderr, "get-vendor-log: out of memory\n");
+		fclose(fp);
+		return -1;
+	}
+
+	fprintf(stderr,
+		"get-vendor-log: Vendor Debug Log size=%u bytes, chunk=%d, file=%s\n",
+		total_size, VENDOR_LOG_CHUNK, outfile);
+
+	/* Step 3: fetch in 2K chunks and append to file. */
+	memcpy(req.uuid, vendor_debug_log_uuid, 16);
+
+	while (offset < total_size) {
+		chunk = total_size - offset;
+		if (chunk > VENDOR_LOG_CHUNK)
+			chunk = VENDOR_LOG_CHUNK;
+
+		req.offset = offset;
+		req.length = chunk;
+
+		rc = cxlmi_cmd_get_log(ep, NULL, &req, buf);
+		if (rc) {
+			if (rc > 0)
+				fprintf(stderr,
+					"get-vendor-log: get-log failed at offset %u: %s\n",
+					offset, cxlmi_cmd_retcode_tostr(rc));
+			else
+				fprintf(stderr,
+					"get-vendor-log: ioctl failed at offset %u\n",
+					offset);
+			free(buf);
+			fclose(fp);
+			return rc;
+		}
+
+		if (fwrite(buf, 1, chunk, fp) != chunk) {
+			perror("get-vendor-log: fwrite");
+			free(buf);
+			fclose(fp);
+			return -1;
+		}
+
+		offset += chunk;
+	}
+
+	free(buf);
+	fclose(fp);
+	fprintf(stderr, "get-vendor-log: done, %u bytes written to %s\n",
+		total_size, outfile);
 	return 0;
 }
