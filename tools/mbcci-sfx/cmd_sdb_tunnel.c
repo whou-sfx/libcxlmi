@@ -29,6 +29,21 @@
 
 #define SDB_TUNNEL_OPCODE 0xCCCC
 
+static void dump_hex(const char *label, const void *buf, size_t len)
+{
+#if  0
+	const uint8_t *p = buf;
+	size_t i;
+
+	fprintf(stderr, "%s [%zu bytes]:\n", label, len);
+	for (i = 0; i < len; i++) {
+		fprintf(stderr, " %02x", p[i]);
+		if ((i & 0xf) == 0xf || i == len - 1)
+			fputc('\n', stderr);
+	}
+#endif
+}
+
 /*
  * Local mirror of cxlmi_cmd_fmapi_tunnel_command_req header fields.
  * The full request is this header immediately followed by a cxlmi_cci_msg.
@@ -49,10 +64,37 @@ struct sdb_tunnel_rsp_hdr {
 } __attribute__((packed));
 
 /* ------------------------------------------------------------------ */
+/* Port name → ID mapping                                             */
+/* ------------------------------------------------------------------ */
+
+static const struct {
+	const char *name;
+	uint8_t     id;
+} port_map[] = {
+	{ "vmd0", 0 },
+	{ "vmd1", 1 },
+	{ "i3c",  2 },
+};
+
+/* Returns port id on success, -1 and prints error on unknown name. */
+static int parse_port_id(const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < sizeof(port_map) / sizeof(port_map[0]); i++) {
+		if (strcmp(name, port_map[i].name) == 0)
+			return port_map[i].id;
+	}
+	fprintf(stderr, "sdb-tunnel: unknown --port '%s' (valid: vmd0, vmd1, i3c)\n",
+		name);
+	return -1;
+}
+
+/* ------------------------------------------------------------------ */
 /* sdb-tunnel identify (inner opcode 0x0001)                          */
 /* ------------------------------------------------------------------ */
 
-static int sdb_tunnel_identify(struct cxlmi_endpoint *ep)
+static int sdb_tunnel_identify(struct cxlmi_endpoint *ep, int argc, char **argv)
 {
 	/*
 	 * Request: tunnel header + cxlmi_cci_msg with no payload.
@@ -69,10 +111,24 @@ static int sdb_tunnel_identify(struct cxlmi_endpoint *ep)
 		struct cxlmi_cmd_identify_rsp rsp;
 	} __attribute__((packed)) rsp;
 
-	int rc;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel identify [--port <vmd0|vmd1|i3c>]\n");
+			return -1;
+		}
+	}
 
 	memset(&req, 0, sizeof(req));
-	req.hdr.id           = 0;
+	req.hdr.id           = port_id;
 	req.hdr.target_type  = 0;
 	req.hdr.command_size = sizeof(req.msg); /* inner CCI msg, no payload */
 
@@ -82,6 +138,8 @@ static int sdb_tunnel_identify(struct cxlmi_endpoint *ep)
 	/* category=0 (CXL_MCTP_CATEGORY_REQ), tag=0, pl_length=0 already zero */
 
 	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
 
 	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
 				       &req, sizeof(req),
@@ -95,6 +153,8 @@ static int sdb_tunnel_identify(struct cxlmi_endpoint *ep)
 		return rc;
 	}
 
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
 	if (rsp.msg.return_code != 0) {
 		fprintf(stderr, "sdb-tunnel identify: inner CCI error 0x%04x\n",
 			rsp.msg.return_code);
@@ -105,8 +165,18 @@ static int sdb_tunnel_identify(struct cxlmi_endpoint *ep)
 	printf("Device ID:          0x%04x\n", rsp.rsp.device_id);
 	printf("Subsys Vendor ID:   0x%04x\n", rsp.rsp.subsys_vendor_id);
 	printf("Subsys ID:          0x%04x\n", rsp.rsp.subsys_id);
-	printf("Serial Number:      0x%016llx\n",
-	       (unsigned long long)rsp.rsp.serial_num);
+	{
+		char sn[sizeof(rsp.rsp.serial_num) + 1];
+		size_t j;
+
+		memcpy(sn, &rsp.rsp.serial_num, sizeof(rsp.rsp.serial_num));
+		sn[sizeof(rsp.rsp.serial_num)] = '\0';
+		for (j = 0; j < sizeof(rsp.rsp.serial_num); j++) {
+			if ((unsigned char)sn[j] < 0x20 || (unsigned char)sn[j] > 0x7e)
+				sn[j] = '.';
+		}
+		printf("Serial Number:      %s\n", sn);
+	}
 	printf("Max Msg Size:       %u (2^%u bytes)\n",
 	       rsp.rsp.max_msg_size, rsp.rsp.max_msg_size);
 	printf("Component Type:     0x%02x\n", rsp.rsp.component_type);
@@ -123,12 +193,12 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 	if (argc < 2) {
 		fprintf(stderr,
 			"Usage: sdb-tunnel <cci-cmd> [args...]\n"
-			"  identify   Generic Component Identify (0x0001)\n");
+			"  identify [--port <vmd0|vmd1|i3c>]   Generic Component Identify (0x0001)\n");
 		return -1;
 	}
 
 	if (strcmp(argv[1], "identify") == 0)
-		return sdb_tunnel_identify(ep);
+		return sdb_tunnel_identify(ep, argc - 2, argv + 2);
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr, "  supported: identify\n");
