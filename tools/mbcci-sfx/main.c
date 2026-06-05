@@ -31,7 +31,7 @@ static const struct subcmd subcmds[] = {
 	{ "get-vendor-log",            cmd_get_vendor_log,
 	  "Fetch full Vendor Debug Log in 2K chunks -f <output_file>" },
 	{ "sdb-tunnel",                cmd_sdb_tunnel,
-	  "Send tunnel-wrapped CCI cmd via sideband (0xCCCC): sdb-tunnel <cci-cmd> [--port <vmd0|vmd1|i3c>]" },
+	  "Tunnel CCI cmd via sideband (0xCCCC): identify|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);
