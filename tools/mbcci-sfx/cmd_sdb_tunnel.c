@@ -71,8 +71,8 @@ static const struct {
 	const char *name;
 	uint8_t     id;
 } port_map[] = {
-	{ "vmd0", 0 },
-	{ "vmd1", 1 },
+	{ "vdm0", 0 },
+	{ "vdm1", 1 },
 	{ "i3c",  2 },
 };
 
@@ -85,7 +85,37 @@ static int parse_port_id(const char *name)
 		if (strcmp(name, port_map[i].name) == 0)
 			return port_map[i].id;
 	}
-	fprintf(stderr, "sdb-tunnel: unknown --port '%s' (valid: vmd0, vmd1, i3c)\n",
+	fprintf(stderr, "sdb-tunnel: unknown --port '%s' (valid: vdm0, vdm1, i3c)\n",
+		name);
+	return -1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Event log name → value mapping                                     */
+/* ------------------------------------------------------------------ */
+
+static const struct {
+	const char *name;
+	uint8_t     value;
+} event_log_map[] = {
+	{ "info",    0 },
+	{ "warn",    1 },
+	{ "failure", 2 },
+	{ "fatal",   3 },
+	{ "dcd",     4 },
+};
+
+/* Returns log value on success, -1 and prints error on unknown name. */
+static int parse_event_log_local(const char *name)
+{
+	size_t i;
+
+	for (i = 0; i < sizeof(event_log_map) / sizeof(event_log_map[0]); i++) {
+		if (strcmp(name, event_log_map[i].name) == 0)
+			return event_log_map[i].value;
+	}
+	fprintf(stderr,
+		"sdb-tunnel: unknown --log '%s' (valid: info, warn, failure, fatal, dcd)\n",
 		name);
 	return -1;
 }
@@ -127,7 +157,7 @@ static int sdb_tunnel_identify(struct cxlmi_endpoint *ep, int argc, char **argv)
 			port_id = (uint8_t)rc;
 		} else {
 			fprintf(stderr,
-				"Usage: sdb-tunnel identify [--port <vmd0|vmd1|i3c>]\n");
+				"Usage: sdb-tunnel identify [--port <vdm0|vdm1|i3c>]\n");
 			return -1;
 		}
 	}
@@ -190,6 +220,76 @@ static int sdb_tunnel_identify(struct cxlmi_endpoint *ep, int argc, char **argv)
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel bg-op-abort (inner opcode 0x0005)                       */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_bg_op_abort(struct cxlmi_endpoint *ep,
+				  int argc, char **argv)
+{
+	/* No request payload, no response payload. */
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel bg-op-abort [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x05; /* REQUEST_BG_OP_ABORT */
+	req.msg.command_set = 0x00; /* INFOSTAT */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel bg-op-abort failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel bg-op-abort ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr, "sdb-tunnel bg-op-abort: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("bg-op-abort OK\n");
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* sdb-tunnel get-resp-msg-limit (inner opcode 0x0003)                */
 /* ------------------------------------------------------------------ */
 
@@ -218,7 +318,7 @@ static int sdb_tunnel_get_resp_msg_limit(struct cxlmi_endpoint *ep,
 			port_id = (uint8_t)rc;
 		} else {
 			fprintf(stderr,
-				"Usage: sdb-tunnel get-resp-msg-limit [--port <vmd0|vmd1|i3c>]\n");
+				"Usage: sdb-tunnel get-resp-msg-limit [--port <vdm0|vdm1|i3c>]\n");
 			return -1;
 		}
 	}
@@ -300,7 +400,7 @@ static int sdb_tunnel_set_resp_msg_limit(struct cxlmi_endpoint *ep,
 		} else {
 			fprintf(stderr,
 				"Usage: sdb-tunnel set-resp-msg-limit"
-				" [--port <vmd0|vmd1|i3c>] --limit <0-255>\n");
+				" [--port <vdm0|vdm1|i3c>] --limit <0-255>\n");
 			return -1;
 		}
 	}
@@ -308,7 +408,7 @@ static int sdb_tunnel_set_resp_msg_limit(struct cxlmi_endpoint *ep,
 	if (!has_limit) {
 		fprintf(stderr,
 			"Usage: sdb-tunnel set-resp-msg-limit"
-			" [--port <vmd0|vmd1|i3c>] --limit <0-255>\n");
+			" [--port <vdm0|vdm1|i3c>] --limit <0-255>\n");
 		return -1;
 	}
 
@@ -353,6 +453,179 @@ static int sdb_tunnel_set_resp_msg_limit(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel get-event-records (inner opcode 0x0100)                 */
+/* ------------------------------------------------------------------ */
+
+#define SDB_MAX_EVENT_RECORDS 20
+#define SDB_RSP_FLAG_OVERFLOW    (1 << 0)
+#define SDB_RSP_FLAG_MORE_EVENTS (1 << 1)
+
+/*
+ * The response buffer must accommodate the tunnel wrapper, the inner
+ * cxlmi_cci_msg header, the fixed part of cxlmi_cmd_get_event_records_rsp,
+ * and up to SDB_MAX_EVENT_RECORDS variable-length records.
+ */
+typedef struct {
+	struct sdb_tunnel_rsp_hdr              hdr;
+	struct cxlmi_cci_msg                   msg;
+	struct cxlmi_cmd_get_event_records_rsp rsp;
+} __attribute__((packed)) sdb_get_event_rsp_t;
+
+static int sdb_tunnel_get_event_records(struct cxlmi_endpoint *ep,
+					int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr              hdr;
+		struct cxlmi_cci_msg                   msg;
+		struct cxlmi_cmd_get_event_records_req req_payload;
+	} __attribute__((packed)) req;
+
+	sdb_get_event_rsp_t *rsp_buf;
+	size_t rsp_buf_sz;
+	uint8_t port_id = 0;
+	const char *log_name = NULL;
+	uint32_t round = 0;
+	int rc = 0, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--log") == 0 && i + 1 < argc) {
+			log_name = argv[++i];
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel get-event-records"
+				" [--port <vdm0|vdm1|i3c>] --log <info|warn|failure|fatal|dcd>\n");
+			return -1;
+		}
+	}
+
+	if (!log_name) {
+		fprintf(stderr,
+			"Usage: sdb-tunnel get-event-records"
+			" [--port <vdm0|vdm1|i3c>] --log <info|warn|failure|fatal|dcd>\n");
+		return -1;
+	}
+
+	rc = parse_event_log_local(log_name);
+	if (rc < 0)
+		return -1;
+
+	rsp_buf_sz = sizeof(sdb_get_event_rsp_t) +
+		     SDB_MAX_EVENT_RECORDS * sizeof(struct cxlmi_event_record);
+	rsp_buf = calloc(1, rsp_buf_sz);
+	if (!rsp_buf) {
+		fprintf(stderr, "sdb-tunnel get-event-records: out of memory\n");
+		return -1;
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg) + sizeof(req.req_payload);
+
+	req.msg.command      = 0x00; /* GET_EVENT_RECORDS */
+	req.msg.command_set  = 0x01; /* Event (0x01xx)    */
+	req.msg.pl_length[0] = sizeof(req.req_payload); /* 1 byte */
+
+	req.req_payload.event_log = (uint8_t)rc;
+
+	printf("Log: %s (%u)\n", log_name, req.req_payload.event_log);
+
+	do {
+		uint16_t count;
+		uint16_t k;
+
+		memset(rsp_buf, 0, rsp_buf_sz);
+
+		dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+		rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+					       &req, sizeof(req),
+					       rsp_buf, rsp_buf_sz);
+		if (rc) {
+			if (rc > 0)
+				fprintf(stderr,
+					"sdb-tunnel get-event-records failed: %s\n",
+					cxlmi_cmd_retcode_tostr(rc));
+			else
+				fprintf(stderr,
+					"sdb-tunnel get-event-records ioctl failed\n");
+			break;
+		}
+
+		dump_hex("sdb-tunnel RX", rsp_buf, rsp_buf_sz);
+
+		if (rsp_buf->msg.return_code != 0) {
+			fprintf(stderr,
+				"sdb-tunnel get-event-records: inner CCI error 0x%04x\n",
+				rsp_buf->msg.return_code);
+			rc = (int)rsp_buf->msg.return_code;
+			break;
+		}
+
+		printf("\n--- Round %u ---\n", round + 1);
+		printf("Flags:                 0x%02x [%s%s]\n",
+		       rsp_buf->rsp.flags,
+		       (rsp_buf->rsp.flags & SDB_RSP_FLAG_OVERFLOW)    ? "OVERFLOW "   : "",
+		       (rsp_buf->rsp.flags & SDB_RSP_FLAG_MORE_EVENTS) ? "MORE_EVENTS" : "");
+		printf("Overflow Error Count:  %u\n",
+		       rsp_buf->rsp.overflow_err_count);
+		printf("First Overflow TS:     %llu\n",
+		       (unsigned long long)rsp_buf->rsp.first_overflow_timestamp);
+		printf("Last Overflow TS:      %llu\n",
+		       (unsigned long long)rsp_buf->rsp.last_overflow_timestamp);
+
+		count = rsp_buf->rsp.record_count;
+		if (count > SDB_MAX_EVENT_RECORDS) {
+			fprintf(stderr,
+				"warning: record_count %u exceeds limit %u, clamping\n",
+				count, SDB_MAX_EVENT_RECORDS);
+			count = SDB_MAX_EVENT_RECORDS;
+		}
+		printf("Record Count:          %u\n", count);
+
+		for (k = 0; k < count; k++) {
+			const struct cxlmi_event_record *r =
+				&rsp_buf->rsp.records[k];
+			int j;
+
+			printf("\n  [Record %u]\n", k);
+			printf("    UUID:           ");
+			for (j = 0; j < 16; j++)
+				printf("%02x", r->uuid[j]);
+			printf("\n");
+			printf("    Handle:         0x%04x\n", r->handle);
+			printf("    Related Handle: 0x%04x\n", r->related_handle);
+			printf("    Timestamp:      %llu\n",
+			       (unsigned long long)r->timestamp);
+			printf("    Flags:          0x%02x 0x%02x 0x%02x\n",
+			       r->flags[0], r->flags[1], r->flags[2]);
+			printf("    Length:         %u\n", r->length);
+			printf("    MaintOpClass:   0x%02x  SubClass: 0x%02x\n",
+			       r->maint_op_class, r->maint_op_subclass);
+			printf("    LD ID:          %u  Head ID: %u\n",
+			       r->ld_id, r->head_id);
+			printf("    Data:           ");
+			for (j = 0; j < 0x50; j++) {
+				printf("%02x", r->data[j]);
+				if ((j + 1) % 16 == 0 && j + 1 < 0x50)
+					printf("\n                    ");
+			}
+			printf("\n");
+		}
+
+		round++;
+	} while (rsp_buf->rsp.flags & SDB_RSP_FLAG_MORE_EVENTS);
+
+	free(rsp_buf);
+	return rc;
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -361,20 +634,27 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 	if (argc < 2) {
 		fprintf(stderr,
 			"Usage: sdb-tunnel <cci-cmd> [args...]\n"
-			"  identify          [--port <vmd0|vmd1|i3c>]             Generic Component Identify (0x0001)\n"
-			"  get-resp-msg-limit[--port <vmd0|vmd1|i3c>]             Get Response Message Limit (0x0003)\n"
-			"  set-resp-msg-limit[--port <vmd0|vmd1|i3c>] --limit <n> Set Response Message Limit (0x0004)\n");
+			"  identify           [--port <vdm0|vdm1|i3c>]                        Generic Component Identify (0x0001)\n"
+			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
+			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
+			"  bg-op-abort        [--port <vdm0|vdm1|i3c>]                        Request Abort Background Operation (0x0005)\n"
+			"  get-event-records  [--port <vdm0|vdm1|i3c>] --log <info|warn|...>  Get Event Records (0x0100)\n");
 		return -1;
 	}
 
 	if (strcmp(argv[1], "identify") == 0)
 		return sdb_tunnel_identify(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "bg-op-abort") == 0)
+		return sdb_tunnel_bg_op_abort(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-resp-msg-limit") == 0)
 		return sdb_tunnel_get_resp_msg_limit(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "set-resp-msg-limit") == 0)
 		return sdb_tunnel_set_resp_msg_limit(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-event-records") == 0)
+		return sdb_tunnel_get_event_records(ep, argc - 2, argv + 2);
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
-	fprintf(stderr, "  supported: identify, get-resp-msg-limit, set-resp-msg-limit\n");
+	fprintf(stderr,
+		"  supported: identify, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit, get-event-records\n");
 	return -1;
 }
