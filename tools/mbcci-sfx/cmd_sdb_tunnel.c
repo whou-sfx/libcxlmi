@@ -27,7 +27,10 @@
 
 #include "mbcci-sfx.h"
 
-#define SDB_TUNNEL_OPCODE 0xCCCC
+#define SDB_TUNNEL_OPCODE     0xCCCC
+#define SDB_MAX_EVENT_RECORDS 20       /* matches CXLMI_MAX_SUPPORTED_EVENT_RECORDS */
+#define SDB_RSP_FLAG_OVERFLOW    (1 << 0)
+#define SDB_RSP_FLAG_MORE_EVENTS (1 << 1)
 
 static void dump_hex(const char *label, const void *buf, size_t len)
 {
@@ -453,12 +456,142 @@ static int sdb_tunnel_set_resp_msg_limit(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
-/* sdb-tunnel get-event-records (inner opcode 0x0100)                 */
+/* sdb-tunnel clear-event-records (inner opcode 0x0101)               */
 /* ------------------------------------------------------------------ */
 
-#define SDB_MAX_EVENT_RECORDS 20
-#define SDB_RSP_FLAG_OVERFLOW    (1 << 0)
-#define SDB_RSP_FLAG_MORE_EVENTS (1 << 1)
+static int sdb_tunnel_clear_event_records(struct cxlmi_endpoint *ep,
+					  int argc, char **argv)
+{
+	/*
+	 * req payload has a FAM (handles[]), so the full tunnel packet is
+	 * heap-allocated.  Layout:
+	 *   sdb_tunnel_req_hdr (4B) + cxlmi_cci_msg (12B) +
+	 *   cxlmi_cmd_clear_event_records_req fixed (6B) + nr_recs*2B
+	 */
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	uint16_t handles[SDB_MAX_EVENT_RECORDS];
+	uint8_t  port_id = 0, nr_recs = 0, clear_all = 0;
+	const char *log_name = NULL;
+	uint8_t  *req_buf = NULL;
+	size_t    req_payload_sz, full_req_sz;
+	struct sdb_tunnel_req_hdr             *req_hdr;
+	struct cxlmi_cci_msg                  *req_msg;
+	struct cxlmi_cmd_clear_event_records_req *req_pl;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--log") == 0 && i + 1 < argc) {
+			log_name = argv[++i];
+		} else if (strcmp(argv[i], "--all") == 0) {
+			clear_all = 1;
+		} else if (strcmp(argv[i], "--handle") == 0 && i + 1 < argc) {
+			if (nr_recs >= SDB_MAX_EVENT_RECORDS) {
+				fprintf(stderr,
+					"sdb-tunnel clear-event-records: too many --handle values (max %d)\n",
+					SDB_MAX_EVENT_RECORDS);
+				return -1;
+			}
+			handles[nr_recs++] = (uint16_t)strtoul(argv[++i], NULL, 0);
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel clear-event-records"
+				" [--port <vmd0|vmd1|i3c>] --log <info|warn|failure|fatal|dcd>"
+				" [--all] [--handle <h>...]\n");
+			return -1;
+		}
+	}
+
+	if (!log_name) {
+		fprintf(stderr,
+			"Usage: sdb-tunnel clear-event-records"
+			" [--port <vmd0|vmd1|i3c>] --log <info|warn|failure|fatal|dcd>"
+			" [--all] [--handle <h>...]\n");
+		return -1;
+	}
+
+	rc = parse_event_log_local(log_name);
+	if (rc < 0)
+		return -1;
+
+	/* Build the tunnel packet dynamically to accommodate handles[]. */
+	req_payload_sz = sizeof(*req_pl) + nr_recs * sizeof(uint16_t);
+	full_req_sz    = sizeof(*req_hdr) + sizeof(*req_msg) + req_payload_sz;
+
+	req_buf = calloc(1, full_req_sz);
+	if (!req_buf) {
+		fprintf(stderr, "sdb-tunnel clear-event-records: out of memory\n");
+		return -1;
+	}
+
+	req_hdr = (struct sdb_tunnel_req_hdr *)req_buf;
+	req_msg = (struct cxlmi_cci_msg *)(req_buf + sizeof(*req_hdr));
+	req_pl  = (struct cxlmi_cmd_clear_event_records_req *)
+		  (req_buf + sizeof(*req_hdr) + sizeof(*req_msg));
+
+	req_hdr->id           = port_id;
+	req_hdr->target_type  = 0;
+	req_hdr->command_size = (uint16_t)(sizeof(*req_msg) + req_payload_sz);
+
+	req_msg->command     = 0x01; /* CLEAR_RECORDS */
+	req_msg->command_set = 0x01; /* EVENTS        */
+	/* pl_length is 20-bit LE; fits in pl_length[0..1] for reasonable sizes */
+	req_msg->pl_length[0] = (uint8_t)(req_payload_sz & 0xff);
+	req_msg->pl_length[1] = (uint8_t)((req_payload_sz >> 8) & 0xff);
+
+	req_pl->event_log   = (uint8_t)rc;
+	if (clear_all) {
+		req_pl->clear_flags = 0x1;
+		req_pl->nr_recs     = 0;
+	} else {
+		req_pl->clear_flags = 0;
+		req_pl->nr_recs     = nr_recs;
+		memcpy(req_pl->handles, handles, nr_recs * sizeof(uint16_t));
+	}
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", req_buf, full_req_sz);
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       req_buf, full_req_sz,
+				       &rsp, sizeof(rsp));
+	free(req_buf);
+
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel clear-event-records failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel clear-event-records ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel clear-event-records: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("Event records cleared (log=%s%s)\n",
+	       log_name, clear_all ? ", all" : "");
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel get-event-records (inner opcode 0x0100)                 */
+/* ------------------------------------------------------------------ */
 
 /*
  * The response buffer must accommodate the tunnel wrapper, the inner
@@ -637,8 +770,9 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  identify           [--port <vdm0|vdm1|i3c>]                        Generic Component Identify (0x0001)\n"
 			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
 			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
-			"  bg-op-abort        [--port <vdm0|vdm1|i3c>]                        Request Abort Background Operation (0x0005)\n"
-			"  get-event-records  [--port <vdm0|vdm1|i3c>] --log <info|warn|...>  Get Event Records (0x0100)\n");
+			"  bg-op-abort          [--port <vmd0|vmd1|i3c>]                                          Request Abort Background Operation (0x0005)\n"
+			"  get-event-records    [--port <vmd0|vmd1|i3c>] --log <info|warn|...>                 Get Event Records (0x0100)\n"
+			"  clear-event-records  [--port <vmd0|vmd1|i3c>] --log <info|warn|...> [--all|--handle <h>...]  Clear Event Records (0x0101)\n");
 		return -1;
 	}
 
@@ -652,9 +786,12 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_set_resp_msg_limit(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-event-records") == 0)
 		return sdb_tunnel_get_event_records(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "clear-event-records") == 0)
+		return sdb_tunnel_clear_event_records(ep, argc - 2, argv + 2);
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit, get-event-records\n");
+		"  supported: identify, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		" get-event-records, clear-event-records\n");
 	return -1;
 }
