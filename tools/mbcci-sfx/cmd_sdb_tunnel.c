@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <libcxlmi.h>
 
@@ -937,6 +938,173 @@ static int sdb_tunnel_set_mctp_evt_int_policy(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel get-timestamp (inner opcode 0x0300)                     */
+/* ------------------------------------------------------------------ */
+
+static void sdb_print_timestamp(uint64_t ns)
+{
+	time_t sec = (time_t)(ns / 1000000000ULL);
+	uint32_t frac_ns = (uint32_t)(ns % 1000000000ULL);
+	struct tm *tm;
+	char buf[64];
+
+	printf("Timestamp (raw):    %llu ns\n", (unsigned long long)ns);
+	tm = localtime(&sec);
+	if (tm && strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm))
+		printf("Timestamp (local):  %s.%09u\n", buf, frac_ns);
+	else
+		printf("Timestamp (local):  (decode failed)\n");
+}
+
+static int sdb_tunnel_get_timestamp(struct cxlmi_endpoint *ep,
+				    int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+		struct cxlmi_cmd_get_timestamp_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel get-timestamp [--port <vmd0|vmd1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x00; /* GET_TIMESTAMP */
+	req.msg.command_set = 0x03; /* TIMESTAMP     */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel get-timestamp failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel get-timestamp ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr, "sdb-tunnel get-timestamp: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	sdb_print_timestamp(rsp.rsp.timestamp);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel set-timestamp (inner opcode 0x0301)                     */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_set_timestamp(struct cxlmi_endpoint *ep,
+				    int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+		struct cxlmi_cmd_set_timestamp_req payload;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	uint8_t port_id = 0;
+	int rc, i;
+	struct timespec ts;
+	uint64_t ts_ns;
+
+	/* Default: current host time. */
+	clock_gettime(CLOCK_REALTIME, &ts);
+	ts_ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--ts") == 0 && i + 1 < argc) {
+			ts_ns = strtoull(argv[++i], NULL, 0);
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel set-timestamp [--port <vmd0|vmd1|i3c>] [--ts <ns>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg) + sizeof(req.payload);
+
+	req.msg.command      = 0x01; /* SET_TIMESTAMP */
+	req.msg.command_set  = 0x03; /* TIMESTAMP     */
+	req.msg.pl_length[0] = sizeof(req.payload) & 0xff;
+	req.msg.pl_length[1] = (sizeof(req.payload) >> 8) & 0xff;
+
+	req.payload.timestamp = ts_ns;
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel set-timestamp failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel set-timestamp ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr, "sdb-tunnel set-timestamp: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("Timestamp set to %llu ns\n", (unsigned long long)ts_ns);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -952,7 +1120,9 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  get-event-records    [--port <vmd0|vmd1|i3c>] --log <info|warn|...>                 Get Event Records (0x0100)\n"
 			"  clear-event-records      [--port <vmd0|vmd1|i3c>] --log <...> [--all|--handle <h>...]  Clear Event Records (0x0101)\n"
 			"  get-mctp-evt-int-policy  [--port <vmd0|vmd1|i3c>]                                   Get MCTP Event Interrupt Policy (0x0104)\n"
-			"  set-mctp-evt-int-policy  [--port <vmd0|vmd1|i3c>] --settings <hex>                  Set MCTP Event Interrupt Policy (0x0105)\n");
+			"  set-mctp-evt-int-policy  [--port <vmd0|vmd1|i3c>] --settings <hex>                  Set MCTP Event Interrupt Policy (0x0105)\n"
+			"  get-timestamp            [--port <vmd0|vmd1|i3c>]                                   Get Timestamp (0x0300)\n"
+			"  set-timestamp            [--port <vmd0|vmd1|i3c>] [--ts <ns>]                       Set Timestamp (0x0301, default: host time)\n");
 		return -1;
 	}
 
@@ -972,11 +1142,16 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_get_mctp_evt_int_policy(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "set-mctp-evt-int-policy") == 0)
 		return sdb_tunnel_set_mctp_evt_int_policy(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-timestamp") == 0)
+		return sdb_tunnel_get_timestamp(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "set-timestamp") == 0)
+		return sdb_tunnel_set_timestamp(ep, argc - 2, argv + 2);
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
 		"  supported: identify, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
-		" get-mctp-evt-int-policy, set-mctp-evt-int-policy\n");
+		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
+		" get-timestamp, set-timestamp\n");
 	return -1;
 }

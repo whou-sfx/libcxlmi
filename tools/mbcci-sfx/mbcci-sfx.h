@@ -31,6 +31,9 @@ int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_vendor_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+int cmd_get_timestamp(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_set_timestamp(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv);
 
 #endif /* MBCCI_SFX_H */

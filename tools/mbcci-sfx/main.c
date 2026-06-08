@@ -30,6 +30,10 @@ static const struct subcmd subcmds[] = {
 	  "Get Log (0401h) --uuid <hex32> [--offset <n>] [--length <n>]" },
 	{ "get-vendor-log",            cmd_get_vendor_log,
 	  "Fetch full Vendor Debug Log in 2K chunks -f <output_file>" },
+	{ "get-timestamp",             cmd_get_timestamp,
+	  "Get device timestamp (0300h)" },
+	{ "set-timestamp",             cmd_set_timestamp,
+	  "Set device timestamp (0301h) [--ts <ns>] (default: current host time)" },
 	{ "sdb-tunnel",                cmd_sdb_tunnel,
 	  "Tunnel CCI cmd via sideband (0xCCCC): identify|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
 };
