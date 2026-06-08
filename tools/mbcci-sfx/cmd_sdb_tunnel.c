@@ -759,6 +759,184 @@ static int sdb_tunnel_get_event_records(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel get-mctp-evt-int-policy (inner opcode 0x0104)           */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_get_mctp_evt_int_policy(struct cxlmi_endpoint *ep,
+					      int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr                          hdr;
+		struct cxlmi_cci_msg                               msg;
+		struct cxlmi_cmd_get_mctp_event_interrupt_policy_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel get-mctp-evt-int-policy [--port <vmd0|vmd1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x04; /* GET_MCTP_EVENT_INTERRUPT_POLICY */
+	req.msg.command_set = 0x01; /* EVENTS */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr,
+				"sdb-tunnel get-mctp-evt-int-policy failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel get-mctp-evt-int-policy ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel get-mctp-evt-int-policy: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	{
+		uint16_t s = rsp.rsp.event_interrupt_settings;
+
+		printf("MCTP Event Interrupt Settings: 0x%04x\n", s);
+		printf("  [0] Informational Event Log:       %s\n", (s >> 0) & 1 ? "enabled" : "disabled");
+		printf("  [1] Warning Event Log:             %s\n", (s >> 1) & 1 ? "enabled" : "disabled");
+		printf("  [2] Failure Event Log:             %s\n", (s >> 2) & 1 ? "enabled" : "disabled");
+		printf("  [3] Fatal Event Log:               %s\n", (s >> 3) & 1 ? "enabled" : "disabled");
+		printf("  [4] Dynamic Capacity Event Log:    %s\n", (s >> 4) & 1 ? "enabled" : "disabled");
+		printf("  [15] Background Operation Done:    %s\n", (s >> 15) & 1 ? "enabled" : "disabled");
+	}
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel set-mctp-evt-int-policy (inner opcode 0x0105)           */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_set_mctp_evt_int_policy(struct cxlmi_endpoint *ep,
+					      int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                          hdr;
+		struct cxlmi_cci_msg                               msg;
+		struct cxlmi_cmd_set_mctp_event_interrupt_policy_req payload;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	uint8_t port_id = 0;
+	int has_settings = 0, rc, i;
+	unsigned long settings_val = 0;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--settings") == 0 && i + 1 < argc) {
+			settings_val = strtoul(argv[++i], NULL, 0);
+			if (settings_val > 0xffff) {
+				fprintf(stderr,
+					"sdb-tunnel set-mctp-evt-int-policy:"
+					" --settings must be a 16-bit value (0x0000-0xffff)\n");
+				return -1;
+			}
+			has_settings = 1;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel set-mctp-evt-int-policy"
+				" [--port <vmd0|vmd1|i3c>] --settings <hex>\n");
+			return -1;
+		}
+	}
+
+	if (!has_settings) {
+		fprintf(stderr,
+			"Usage: sdb-tunnel set-mctp-evt-int-policy"
+			" [--port <vmd0|vmd1|i3c>] --settings <hex>\n");
+		return -1;
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg) + sizeof(req.payload);
+
+	req.msg.command      = 0x05; /* SET_MCTP_EVENT_INTERRUPT_POLICY */
+	req.msg.command_set  = 0x01; /* EVENTS */
+	req.msg.pl_length[0] = sizeof(req.payload) & 0xff;
+	req.msg.pl_length[1] = (sizeof(req.payload) >> 8) & 0xff;
+
+	req.payload.event_interrupt_settings = (uint16_t)settings_val;
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr,
+				"sdb-tunnel set-mctp-evt-int-policy failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel set-mctp-evt-int-policy ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel set-mctp-evt-int-policy: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("MCTP Event Interrupt Settings set: 0x%04lx\n", settings_val);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -772,7 +950,9 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
 			"  bg-op-abort          [--port <vmd0|vmd1|i3c>]                                          Request Abort Background Operation (0x0005)\n"
 			"  get-event-records    [--port <vmd0|vmd1|i3c>] --log <info|warn|...>                 Get Event Records (0x0100)\n"
-			"  clear-event-records  [--port <vmd0|vmd1|i3c>] --log <info|warn|...> [--all|--handle <h>...]  Clear Event Records (0x0101)\n");
+			"  clear-event-records      [--port <vmd0|vmd1|i3c>] --log <...> [--all|--handle <h>...]  Clear Event Records (0x0101)\n"
+			"  get-mctp-evt-int-policy  [--port <vmd0|vmd1|i3c>]                                   Get MCTP Event Interrupt Policy (0x0104)\n"
+			"  set-mctp-evt-int-policy  [--port <vmd0|vmd1|i3c>] --settings <hex>                  Set MCTP Event Interrupt Policy (0x0105)\n");
 		return -1;
 	}
 
@@ -788,10 +968,15 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_get_event_records(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "clear-event-records") == 0)
 		return sdb_tunnel_clear_event_records(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-mctp-evt-int-policy") == 0)
+		return sdb_tunnel_get_mctp_evt_int_policy(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "set-mctp-evt-int-policy") == 0)
+		return sdb_tunnel_set_mctp_evt_int_policy(ep, argc - 2, argv + 2);
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
 		"  supported: identify, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
-		" get-event-records, clear-event-records\n");
+		" get-event-records, clear-event-records,"
+		" get-mctp-evt-int-policy, set-mctp-evt-int-policy\n");
 	return -1;
 }
