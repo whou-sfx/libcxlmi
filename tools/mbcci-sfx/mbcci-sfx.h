@@ -18,7 +18,8 @@ struct subcmd {
 	const char *help;
 };
 
-int cmd_identify(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_identify_memdev(struct cxlmi_endpoint *ep, int argc, char **argv);
+void print_memdev_identify(const struct cxlmi_cmd_memdev_identify_rsp *id);
 
 int cmd_get_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_clear_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);

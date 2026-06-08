@@ -55,6 +55,8 @@ int cmd_vu_evtadd(struct cxlmi_endpoint *ep, int argc, char **argv)
 	evtadd req = {
 		.vuCmdId  = EVTADD,
 		.status   = 0,
+		.in_sz    = 0,
+		.out_sz   = 0,
 		.loglvl   = 0,
 		.intfmask = 0,
 		.count    = 0,

@@ -16,13 +16,16 @@
  *   [ cxlmi_cci_msg      (12B)]  inner CCI response header + payload
  *
  * Currently supported inner commands:
- *   identify   Generic Component Identify (opcode 0x0001)
+ *   identify          Generic Component Identify (opcode 0x0001)
+ *   identify_memdev   Identify Memory Device (opcode 0x4000)
  */
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#include <ccan/endian/endian.h>
 
 #include <libcxlmi.h>
 
@@ -220,6 +223,104 @@ static int sdb_tunnel_identify(struct cxlmi_endpoint *ep, int argc, char **argv)
 	       rsp.rsp.max_msg_size, rsp.rsp.max_msg_size);
 	printf("Component Type:     0x%02x\n", rsp.rsp.component_type);
 
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel identify_memdev (inner opcode 0x4000)                   */
+/* ------------------------------------------------------------------ */
+
+static void sdb_parse_memdev_identify_rsp(
+	const struct cxlmi_cmd_memdev_identify_rsp *wire,
+	struct cxlmi_cmd_memdev_identify_rsp *host)
+{
+	memset(host, 0, sizeof(*host));
+	memcpy(host->fw_revision, wire->fw_revision, sizeof(wire->fw_revision));
+	host->total_capacity = le64_to_cpu(wire->total_capacity);
+	host->volatile_capacity = le64_to_cpu(wire->volatile_capacity);
+	host->persistent_capacity = le64_to_cpu(wire->persistent_capacity);
+	host->partition_align = le64_to_cpu(wire->partition_align);
+	host->info_event_log_size = le16_to_cpu(wire->info_event_log_size);
+	host->warning_event_log_size = le16_to_cpu(wire->warning_event_log_size);
+	host->failure_event_log_size = le16_to_cpu(wire->failure_event_log_size);
+	host->fatal_event_log_size = le16_to_cpu(wire->fatal_event_log_size);
+	host->lsa_size = le32_to_cpu(wire->lsa_size);
+	memcpy(host->poison_list_max_mer, wire->poison_list_max_mer,
+	       sizeof(wire->poison_list_max_mer));
+	host->inject_poison_limit = le16_to_cpu(wire->inject_poison_limit);
+	host->poison_caps = wire->poison_caps;
+	host->qos_telemetry_caps = wire->qos_telemetry_caps;
+#ifndef SUPPORT_CXL_2_0
+	host->dc_event_log_size = le16_to_cpu(wire->dc_event_log_size);
+#endif
+}
+
+static int sdb_tunnel_identify_memdev(struct cxlmi_endpoint *ep,
+				      int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+		struct cxlmi_cmd_memdev_identify_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_memdev_identify_rsp id;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel identify_memdev [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x00; /* MEMORY_DEVICE */
+	req.msg.command_set = 0x40; /* IDENTIFY       */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel identify_memdev failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel identify_memdev ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel identify_memdev: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	sdb_parse_memdev_identify_rsp(&rsp.rsp, &id);
+	print_memdev_identify(&id);
 	return 0;
 }
 
@@ -1114,6 +1215,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		fprintf(stderr,
 			"Usage: sdb-tunnel <cci-cmd> [args...]\n"
 			"  identify           [--port <vdm0|vdm1|i3c>]                        Generic Component Identify (0x0001)\n"
+			"  identify_memdev    [--port <vdm0|vdm1|i3c>]                        Identify Memory Device (0x4000)\n"
 			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
 			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
 			"  bg-op-abort          [--port <vmd0|vmd1|i3c>]                                          Request Abort Background Operation (0x0005)\n"
@@ -1128,6 +1230,8 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	if (strcmp(argv[1], "identify") == 0)
 		return sdb_tunnel_identify(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "identify_memdev") == 0)
+		return sdb_tunnel_identify_memdev(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "bg-op-abort") == 0)
 		return sdb_tunnel_bg_op_abort(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-resp-msg-limit") == 0)
@@ -1149,7 +1253,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");
