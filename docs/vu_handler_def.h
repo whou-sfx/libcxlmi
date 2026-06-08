@@ -52,9 +52,15 @@ enum VU_0xCC53_CMD_ID_E {
 	SHOWCFGINFO                                                     = 0x0cU,
 	DDRINFO                                                         = 0x0dU,
 	HOSTLOGDBG                                                      = 0x0eU,
+	MBOXLEGACY                                                      = 0x0fU,
+	MCUMBOXDRVDBG                                                   = 0x10U,
+	MBOXMCTP                                                        = 0x11U,
+	MBOXCLIENTDBG                                                   = 0x12U,
+	INFLOGSW                                                        = 0x13U,
 	//For Group: Task Scheduler
 	TOP                                                             = 0x0040U,
 	//For Group: Debug
+	SDBCCIDBG                                                       = 0x0100U,
 	DOEDEBUG                                                        = 0x0103U,
 	DUMPCXLREG                                                      = 0x0104U,
 	PICINIT                                                         = 0x0105U,
@@ -122,6 +128,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -151,6 +159,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -182,6 +192,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -214,6 +226,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -252,6 +266,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	slot;
 	 u32	arg2;
 	 u32	arg3;
@@ -281,6 +297,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	slot;
 	 u32	arg2;
 	 u32	arg3;
@@ -310,6 +328,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	slot;
 	 u32	arg2;
 	 u32	arg3;
@@ -339,6 +359,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	slot;
 	 u32	arg2;
 	 u32	arg3;
@@ -368,6 +390,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	slot;
 	 u32	arg2;
 	 u32	arg3;
@@ -397,6 +421,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	slot;
 	 u32	arg2;
 	 u32	arg3;
@@ -426,6 +452,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	slot;
 	 u32	arg2;
 	 u32	arg3;
@@ -455,6 +483,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	slot;
 	 u32	arg2;
 	 u32	arg3;
@@ -484,6 +514,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	slot;
 	 u32	arg2;
 	 u32	arg3;
@@ -513,6 +545,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	slot;
 	 u32	arg2;
 	 u32	arg3;
@@ -542,6 +576,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	slot;
 	 u32	arg2;
 	 u32	arg3;
@@ -571,6 +607,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -594,6 +632,161 @@ typedef union
 
 
 
+// For VU: mboxlegacy
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	mbox_id;
+	 u32	cmd;
+	 u32	dlen;
+	 u32	data;
+} mboxlegacy;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed mboxlegacy_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed mboxlegacy_output;
+// The VU command data definition
+typedef union 
+{
+	mboxlegacy_input *input;
+	mboxlegacy_output *output;
+}  __packed mboxlegacy_data;
+
+
+
+
+// For VU: mcumboxdrvdbg
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	mbox_id;
+	 u32	op;
+	 u32	arg3;
+	 u32	arg4;
+} mcumboxdrvdbg;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed mcumboxdrvdbg_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed mcumboxdrvdbg_output;
+// The VU command data definition
+typedef union 
+{
+	mcumboxdrvdbg_input *input;
+	mcumboxdrvdbg_output *output;
+}  __packed mcumboxdrvdbg_data;
+
+
+
+
+// For VU: mboxmctp
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	mbox_id;
+	 u32	cmd;
+	 u32	dlen;
+	 u32	data;
+} mboxmctp;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed mboxmctp_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed mboxmctp_output;
+// The VU command data definition
+typedef union 
+{
+	mboxmctp_input *input;
+	mboxmctp_output *output;
+}  __packed mboxmctp_data;
+
+
+
+
+// For VU: mboxclientdbg
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} mboxclientdbg;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed mboxclientdbg_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed mboxclientdbg_output;
+// The VU command data definition
+typedef union 
+{
+	mboxclientdbg_input *input;
+	mboxclientdbg_output *output;
+}  __packed mboxclientdbg_data;
+
+
+
+
+// For VU: infLogSw
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	logsw;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} inflogsw;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed inflogsw_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed inflogsw_output;
+// The VU command data definition
+typedef union 
+{
+	inflogsw_input *input;
+	inflogsw_output *output;
+}  __packed inflogsw_data;
+
+
+
+
 // >>>>>   For Group: Task Scheduler
 
 // For VU: top
@@ -602,6 +795,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -627,12 +822,45 @@ typedef union
 
 // >>>>>   For Group: Debug
 
+// For VU: sdbCciDbg
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	portid;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} sdbccidbg;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed sdbccidbg_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed sdbccidbg_output;
+// The VU command data definition
+typedef union 
+{
+	sdbccidbg_input *input;
+	sdbccidbg_output *output;
+}  __packed sdbccidbg_data;
+
+
+
+
 // For VU: doeDebug
 // The VU command parameter definition, dw10~14 and cqe[0/1] definition
 typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -662,6 +890,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -691,6 +921,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -720,6 +952,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -749,6 +983,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -778,6 +1014,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -807,6 +1045,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -836,6 +1076,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -865,6 +1107,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -894,6 +1138,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -923,6 +1169,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -952,6 +1200,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -981,6 +1231,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1010,6 +1262,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1039,6 +1293,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1068,6 +1324,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1097,6 +1355,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1126,6 +1386,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1155,6 +1417,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1184,6 +1448,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1213,6 +1479,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1242,6 +1510,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1271,6 +1541,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1300,6 +1572,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1329,6 +1603,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1358,6 +1634,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	port;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1387,6 +1665,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	pattern;
 	 u32	size;
@@ -1416,6 +1696,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	pattern;
 	 u32	size;
@@ -1445,6 +1727,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	pattern;
 	 u32	size;
@@ -1474,6 +1758,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1503,6 +1789,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1532,6 +1820,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1561,6 +1851,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1590,6 +1882,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	loglvl;
 	 u32	intfmask;
 	 u32	count;
@@ -1621,6 +1915,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	tran;
 	 u32	opcode;
@@ -1650,6 +1946,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	arg2;
 	 u32	arg3;
@@ -1679,6 +1977,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	tran;
 	 u32	opcode;
@@ -1708,6 +2008,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	tran;
 	 u32	opcode;
@@ -1737,6 +2039,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	tran;
 	 u32	opcode;
@@ -1768,6 +2072,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port_inst;
 	 u32	start_addr;
 	 u32	fix_page_or_enable;
@@ -1797,6 +2103,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	inst;
 	 u32	arg3;
@@ -1826,6 +2134,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	inst;
 	 u32	period;
@@ -1855,6 +2165,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	inst;
 	 u32	threshold;
@@ -1884,6 +2196,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	inst;
 	 u32	msg_sel;
@@ -1913,6 +2227,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	port;
 	 u32	inst;
 	 u32	unit_size;
@@ -1944,6 +2260,8 @@ typedef struct
 {
 	 u32	vuCmdId;
 	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
 	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
@@ -1970,13 +2288,12 @@ typedef union
 
 
 
-
+#ifndef MBCCI_SFX_BUILD
 //
 //
 //For command dispatch function of this OPCODE: OPCODE_VU
 //
-#ifndef MBCCI_SFX_BUILD
-VU_STATUS_E opcode_vu_0xcc53_dispatch_cmd(VU_CMD_HDR_T *hdr, CXL_MB_CMD_INFO *mb);
+VU_STATUS_E opcode_vu_0xcc53_dispatch_cmd(VU_CMD_HDR_T *hdr, CCI_DATA_S *mb);
 
 
 
@@ -2023,12 +2340,24 @@ VU_STATUS_E vu_handler_showcfginfo(vector<string> *pargs __unused, showcfginfo *
 VU_STATUS_E vu_handler_ddrinfo(vector<string> *pargs __unused, ddrinfo *param __unused, ddrinfo_data *pdata __unused);
 // for VU: hostlogDbg
 VU_STATUS_E vu_handler_hostlogdbg(vector<string> *pargs __unused, hostlogdbg *param __unused, hostlogdbg_data *pdata __unused);
+// for VU: mboxlegacy
+VU_STATUS_E vu_handler_mboxlegacy(vector<string> *pargs __unused, mboxlegacy *param __unused, mboxlegacy_data *pdata __unused);
+// for VU: mcumboxdrvdbg
+VU_STATUS_E vu_handler_mcumboxdrvdbg(vector<string> *pargs __unused, mcumboxdrvdbg *param __unused, mcumboxdrvdbg_data *pdata __unused);
+// for VU: mboxmctp
+VU_STATUS_E vu_handler_mboxmctp(vector<string> *pargs __unused, mboxmctp *param __unused, mboxmctp_data *pdata __unused);
+// for VU: mboxclientdbg
+VU_STATUS_E vu_handler_mboxclientdbg(vector<string> *pargs __unused, mboxclientdbg *param __unused, mboxclientdbg_data *pdata __unused);
+// for VU: infLogSw
+VU_STATUS_E vu_handler_inflogsw(vector<string> *pargs __unused, inflogsw *param __unused, inflogsw_data *pdata __unused);
 
 // >>>>>   For Group: Task Scheduler
 // for VU: top
 VU_STATUS_E vu_handler_top(vector<string> *pargs __unused, top *param __unused, top_data *pdata __unused);
 
 // >>>>>   For Group: Debug
+// for VU: sdbCciDbg
+VU_STATUS_E vu_handler_sdbccidbg(vector<string> *pargs __unused, sdbccidbg *param __unused, sdbccidbg_data *pdata __unused);
 // for VU: doeDebug
 VU_STATUS_E vu_handler_doedebug(vector<string> *pargs __unused, doedebug *param __unused, doedebug_data *pdata __unused);
 // for VU: dumpCxlReg
@@ -2131,7 +2460,7 @@ VU_STATUS_E vu_handler_date(vector<string> *pargs __unused, date *param __unused
 // dispatch VU function
 VU_STATUS_E dispatch_uart_cmd(vector<string> *pargs);
 
-#endif /* MBCCI_SFX_BUILD */
+#endif
 
 #endif
 
