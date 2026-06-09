@@ -7,6 +7,7 @@ executable(
     [
         'main.c',
         'cmd_identify.c',
+        'cmd_partition.c',
         'cmd_events.c',
         'cmd_vu_evtadd.c',
         'cmd_logs.c',

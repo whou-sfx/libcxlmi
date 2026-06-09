@@ -21,6 +21,10 @@ struct subcmd {
 int cmd_identify_memdev(struct cxlmi_endpoint *ep, int argc, char **argv);
 void print_memdev_identify(const struct cxlmi_cmd_memdev_identify_rsp *id);
 
+int cmd_get_partition(struct cxlmi_endpoint *ep, int argc, char **argv);
+void print_memdev_partition_info(
+	const struct cxlmi_cmd_memdev_get_partition_info_rsp *pi);
+
 int cmd_get_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_clear_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **argv);
