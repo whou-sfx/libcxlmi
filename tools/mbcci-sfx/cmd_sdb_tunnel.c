@@ -19,6 +19,7 @@
  *   identify          Generic Component Identify (opcode 0x0001)
  *   identify_memdev   Identify Memory Device (opcode 0x4000)
  *   get-partition     Get Partition Info (opcode 0x4100)
+ *   set-partition     Set Partition Info (opcode 0x4101)
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -406,6 +407,92 @@ static int sdb_tunnel_get_partition(struct cxlmi_endpoint *ep,
 
 	sdb_parse_memdev_get_partition_rsp(&rsp.rsp, &pi);
 	print_memdev_partition_info(&pi);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel set-partition (inner opcode 0x4101)                     */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_set_partition(struct cxlmi_endpoint *ep,
+				    int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                         hdr;
+		struct cxlmi_cci_msg                              msg;
+		struct cxlmi_cmd_memdev_set_partition_info_req    payload;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_memdev_set_partition_info_req pi;
+	char *part_argv[16];
+	int part_argc = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (part_argc >= (int)(sizeof(part_argv) / sizeof(part_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel set-partition: too many arguments\n");
+				return -1;
+			}
+			part_argv[part_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_set_partition_req(part_argc, part_argv, &pi);
+	if (rc)
+		return rc;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+
+	req.msg.command     = 0x01; /* SET_PARTITION_INFO */
+	req.msg.command_set = 0x41; /* CCLS               */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] = (uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+
+	req.payload.volatile_capacity = cpu_to_le64(pi.volatile_capacity);
+	req.payload.flags = pi.flags;
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel set-partition failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel set-partition ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel set-partition: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	print_set_partition_result(&pi);
 	return 0;
 }
 
@@ -1302,6 +1389,8 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  identify           [--port <vdm0|vdm1|i3c>]                        Generic Component Identify (0x0001)\n"
 			"  identify_memdev    [--port <vdm0|vdm1|i3c>]                        Identify Memory Device (0x4000)\n"
 			"  get-partition      [--port <vdm0|vdm1|i3c>]                        Get Partition Info (0x4100)\n"
+			"  set-partition      [--port <vdm0|vdm1|i3c>] --next-volatile <MiB> [--flags <n>] [--bp-dirty-shutdown]\n"
+			"                                                                         Set Partition Info (0x4101)\n"
 			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
 			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
 			"  bg-op-abort          [--port <vmd0|vmd1|i3c>]                                          Request Abort Background Operation (0x0005)\n"
@@ -1320,6 +1409,8 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_identify_memdev(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-partition") == 0)
 		return sdb_tunnel_get_partition(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "set-partition") == 0)
+		return sdb_tunnel_set_partition(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "bg-op-abort") == 0)
 		return sdb_tunnel_bg_op_abort(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-resp-msg-limit") == 0)
@@ -1341,7 +1432,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");

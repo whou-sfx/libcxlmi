@@ -16,6 +16,8 @@ static const struct subcmd subcmds[] = {
 	  "Send Memory Device Identify (4000h) to <memN>" },
 	{ "get-partition",             cmd_get_partition,
 	  "Get Partition Info (4100h)" },
+	{ "set-partition",             cmd_set_partition,
+	  "Set Partition Info (4101h) --next-volatile <MiB> [--flags <n>] [--bp-dirty-shutdown]" },
 	{ "get-event-records",         cmd_get_event_records,
 	  "Get Event Records (0100h) --log <info|warn|failure|fatal|dcd>" },
 	{ "clear-event-records",       cmd_clear_event_records,
@@ -37,7 +39,7 @@ static const struct subcmd subcmds[] = {
 	{ "set-timestamp",             cmd_set_timestamp,
 	  "Set device timestamp (0301h) [--ts <ns>] (default: current host time)" },
 	{ "sdb-tunnel",                cmd_sdb_tunnel,
-	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
+	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);

@@ -25,6 +25,12 @@ int cmd_get_partition(struct cxlmi_endpoint *ep, int argc, char **argv);
 void print_memdev_partition_info(
 	const struct cxlmi_cmd_memdev_get_partition_info_rsp *pi);
 
+int cmd_set_partition(struct cxlmi_endpoint *ep, int argc, char **argv);
+int parse_set_partition_req(int argc, char **argv,
+			    struct cxlmi_cmd_memdev_set_partition_info_req *req);
+void print_set_partition_result(
+	const struct cxlmi_cmd_memdev_set_partition_info_req *req);
+
 int cmd_get_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_clear_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **argv);
