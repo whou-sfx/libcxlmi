@@ -20,6 +20,7 @@
  *   identify_memdev   Identify Memory Device (opcode 0x4000)
  *   get-partition     Get Partition Info (opcode 0x4100)
  *   set-partition     Set Partition Info (opcode 0x4101)
+ *   get-fw-info       Get FW Info (opcode 0x0200)
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -493,6 +494,92 @@ static int sdb_tunnel_set_partition(struct cxlmi_endpoint *ep,
 	}
 
 	print_set_partition_result(&pi);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel get-fw-info (inner opcode 0x0200)                       */
+/* ------------------------------------------------------------------ */
+
+static void sdb_parse_get_fw_info_rsp(const struct cxlmi_cmd_get_fw_info_rsp *wire,
+				      struct cxlmi_cmd_get_fw_info_rsp *host)
+{
+	memset(host, 0, sizeof(*host));
+	host->slots_supported = wire->slots_supported;
+	host->slot_info = wire->slot_info;
+	host->caps = wire->caps;
+	memcpy(host->fw_rev1, wire->fw_rev1, sizeof(wire->fw_rev1));
+	memcpy(host->fw_rev2, wire->fw_rev2, sizeof(wire->fw_rev2));
+	memcpy(host->fw_rev3, wire->fw_rev3, sizeof(wire->fw_rev3));
+	memcpy(host->fw_rev4, wire->fw_rev4, sizeof(wire->fw_rev4));
+}
+
+static int sdb_tunnel_get_fw_info(struct cxlmi_endpoint *ep,
+				  int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+		struct cxlmi_cmd_get_fw_info_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_get_fw_info_rsp fw;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel get-fw-info [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x00; /* GET_INFO         */
+	req.msg.command_set = 0x02; /* FIRMWARE_UPDATE */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel get-fw-info failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel get-fw-info ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel get-fw-info: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	sdb_parse_get_fw_info_rsp(&rsp.rsp, &fw);
+	print_get_fw_info(&fw);
 	return 0;
 }
 
@@ -1391,6 +1478,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  get-partition      [--port <vdm0|vdm1|i3c>]                        Get Partition Info (0x4100)\n"
 			"  set-partition      [--port <vdm0|vdm1|i3c>] --next-volatile <MiB> [--flags <n>] [--bp-dirty-shutdown]\n"
 			"                                                                         Set Partition Info (0x4101)\n"
+			"  get-fw-info        [--port <vdm0|vdm1|i3c>]                        Get FW Info (0x0200)\n"
 			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
 			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
 			"  bg-op-abort          [--port <vmd0|vmd1|i3c>]                                          Request Abort Background Operation (0x0005)\n"
@@ -1411,6 +1499,8 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_get_partition(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "set-partition") == 0)
 		return sdb_tunnel_set_partition(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-fw-info") == 0)
+		return sdb_tunnel_get_fw_info(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "bg-op-abort") == 0)
 		return sdb_tunnel_bg_op_abort(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-resp-msg-limit") == 0)
@@ -1432,7 +1522,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");

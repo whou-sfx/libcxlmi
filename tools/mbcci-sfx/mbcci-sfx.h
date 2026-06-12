@@ -31,6 +31,9 @@ int parse_set_partition_req(int argc, char **argv,
 void print_set_partition_result(
 	const struct cxlmi_cmd_memdev_set_partition_info_req *req);
 
+int cmd_get_fw_info(struct cxlmi_endpoint *ep, int argc, char **argv);
+void print_get_fw_info(const struct cxlmi_cmd_get_fw_info_rsp *fw);
+
 int cmd_get_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_clear_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **argv);
