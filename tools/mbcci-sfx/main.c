@@ -20,6 +20,8 @@ static const struct subcmd subcmds[] = {
 	  "Set Partition Info (4101h) --next-volatile <MiB> [--flags <n>] [--bp-dirty-shutdown]" },
 	{ "get-fw-info",               cmd_get_fw_info,
 	  "Get FW Info (0200h)" },
+	{ "transfer-fw",               cmd_transfer_fw,
+	  "Transfer FW (0201h) --input <file> --slot <n> [--chunk-size <n>]" },
 	{ "get-event-records",         cmd_get_event_records,
 	  "Get Event Records (0100h) --log <info|warn|failure|fatal|dcd>" },
 	{ "clear-event-records",       cmd_clear_event_records,
@@ -41,7 +43,7 @@ static const struct subcmd subcmds[] = {
 	{ "set-timestamp",             cmd_set_timestamp,
 	  "Set device timestamp (0301h) [--ts <ns>] (default: current host time)" },
 	{ "sdb-tunnel",                cmd_sdb_tunnel,
-	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
+	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);

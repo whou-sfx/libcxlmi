@@ -34,6 +34,25 @@ void print_set_partition_result(
 int cmd_get_fw_info(struct cxlmi_endpoint *ep, int argc, char **argv);
 void print_get_fw_info(const struct cxlmi_cmd_get_fw_info_rsp *fw);
 
+#define CXL_FW_XFER_FIXED 0x80
+
+struct transfer_fw_params {
+	const char *input_file;
+	uint8_t slot;
+	uint32_t chunk_size;
+};
+
+typedef int (*transfer_fw_send_fn)(struct cxlmi_endpoint *ep, void *ctx,
+				   struct cxlmi_cmd_transfer_fw_req *req,
+				   size_t data_sz);
+
+int parse_transfer_fw_req(int argc, char **argv,
+			  struct transfer_fw_params *params);
+int transfer_fw_file(struct cxlmi_endpoint *ep,
+		     const struct transfer_fw_params *params,
+		     transfer_fw_send_fn send_fn, void *send_ctx);
+int cmd_transfer_fw(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_get_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_clear_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **argv);
