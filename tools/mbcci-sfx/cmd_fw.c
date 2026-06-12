@@ -287,3 +287,116 @@ int cmd_transfer_fw(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	return transfer_fw_file(ep, &params, xfer_send_direct, NULL);
 }
+
+#define CXL_FW_ACTIVATE_ONLINE  0
+#define CXL_FW_ACTIVATE_OFFLINE 1
+
+#define ACTIVATE_FW_USAGE \
+	"activate-fw --slot <n> [--action online|offline]"
+
+static bool activate_fw_ok(int rc)
+{
+	return rc == 0 || rc == CXLMI_RET_BACKGROUND;
+}
+
+static const char *activate_action_name(uint8_t action)
+{
+	switch (action) {
+	case CXL_FW_ACTIVATE_ONLINE:  return "online";
+	case CXL_FW_ACTIVATE_OFFLINE: return "offline";
+	default:                      return "custom";
+	}
+}
+
+void print_activate_fw_result(const struct cxlmi_cmd_activate_fw_req *req,
+			      int rc)
+{
+	printf("Activate FW OK\n");
+	printf("  Slot:   %u\n", req->slot);
+	printf("  Action: %s (%u)\n", activate_action_name(req->action),
+	       req->action);
+	if (rc == CXLMI_RET_BACKGROUND)
+		printf("  Note: background operation started on device\n");
+}
+
+int parse_activate_fw_req(int argc, char **argv,
+			  struct cxlmi_cmd_activate_fw_req *req)
+{
+	int has_slot = 0, has_action = 0;
+	int i;
+
+	memset(req, 0, sizeof(*req));
+	req->action = CXL_FW_ACTIVATE_OFFLINE;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--slot") == 0 && i + 1 < argc) {
+			unsigned long slot = strtoul(argv[++i], NULL, 0);
+
+			if (slot < 1 || slot > 255) {
+				fprintf(stderr,
+					"activate-fw: --slot must be 1-255\n");
+				return -1;
+			}
+			req->slot = (uint8_t)slot;
+			has_slot = 1;
+		} else if (strcmp(argv[i], "--action") == 0 && i + 1 < argc) {
+			const char *action = argv[++i];
+
+			if (strcmp(action, "online") == 0) {
+				req->action = CXL_FW_ACTIVATE_ONLINE;
+			} else if (strcmp(action, "offline") == 0) {
+				req->action = CXL_FW_ACTIVATE_OFFLINE;
+			} else {
+				unsigned long val = strtoul(action, NULL, 0);
+
+				if (val > 255) {
+					fprintf(stderr,
+						"activate-fw: --action must be"
+						" online, offline, or 0-255\n");
+					return -1;
+				}
+				req->action = (uint8_t)val;
+			}
+			has_action = 1;
+		} else {
+			fprintf(stderr, "Usage: %s\n", ACTIVATE_FW_USAGE);
+			return -1;
+		}
+	}
+
+	if (!has_slot) {
+		fprintf(stderr, "Usage: %s\n", ACTIVATE_FW_USAGE);
+		return -1;
+	}
+
+	(void)has_action;
+	return 0;
+}
+
+int cmd_activate_fw(struct cxlmi_endpoint *ep, int argc, char **argv)
+{
+	struct cxlmi_cmd_activate_fw_req req;
+	int rc;
+
+	if (argc < 2) {
+		fprintf(stderr, "Usage: %s\n", ACTIVATE_FW_USAGE);
+		return -1;
+	}
+
+	rc = parse_activate_fw_req(argc - 1, argv + 1, &req);
+	if (rc)
+		return rc;
+
+	rc = cxlmi_cmd_activate_fw(ep, NULL, &req);
+	if (!activate_fw_ok(rc)) {
+		if (rc > 0)
+			fprintf(stderr, "activate fw failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "activate fw ioctl failed\n");
+		return rc;
+	}
+
+	print_activate_fw_result(&req, rc);
+	return 0;
+}

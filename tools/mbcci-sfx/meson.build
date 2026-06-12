@@ -9,6 +9,7 @@ executable(
         'cmd_identify.c',
         'cmd_partition.c',
         'cmd_fw.c',
+        'cmd_health.c',
         'cmd_events.c',
         'cmd_vu_evtadd.c',
         'cmd_logs.c',

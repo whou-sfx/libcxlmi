@@ -53,6 +53,16 @@ int transfer_fw_file(struct cxlmi_endpoint *ep,
 		     transfer_fw_send_fn send_fn, void *send_ctx);
 int cmd_transfer_fw(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+int parse_activate_fw_req(int argc, char **argv,
+			  struct cxlmi_cmd_activate_fw_req *req);
+void print_activate_fw_result(const struct cxlmi_cmd_activate_fw_req *req,
+			      int rc);
+int cmd_activate_fw(struct cxlmi_endpoint *ep, int argc, char **argv);
+
+int cmd_get_health_info(struct cxlmi_endpoint *ep, int argc, char **argv);
+void print_memdev_health_info(
+	const struct cxlmi_cmd_memdev_get_health_info_rsp *hi);
+
 int cmd_get_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_clear_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **argv);

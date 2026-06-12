@@ -22,6 +22,10 @@ static const struct subcmd subcmds[] = {
 	  "Get FW Info (0200h)" },
 	{ "transfer-fw",               cmd_transfer_fw,
 	  "Transfer FW (0201h) --input <file> --slot <n> [--chunk-size <n>]" },
+	{ "activate-fw",               cmd_activate_fw,
+	  "Activate FW (0202h) --slot <n> [--action online|offline]" },
+	{ "get-health-info",           cmd_get_health_info,
+	  "Get Health Info (4200h)" },
 	{ "get-event-records",         cmd_get_event_records,
 	  "Get Event Records (0100h) --log <info|warn|failure|fatal|dcd>" },
 	{ "clear-event-records",       cmd_clear_event_records,
@@ -43,7 +47,7 @@ static const struct subcmd subcmds[] = {
 	{ "set-timestamp",             cmd_set_timestamp,
 	  "Set device timestamp (0301h) [--ts <ns>] (default: current host time)" },
 	{ "sdb-tunnel",                cmd_sdb_tunnel,
-	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
+	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|activate-fw|get-health-info|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);

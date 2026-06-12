@@ -22,6 +22,8 @@
  *   set-partition     Set Partition Info (opcode 0x4101)
  *   get-fw-info       Get FW Info (opcode 0x0200)
  *   transfer-fw       Transfer FW (opcode 0x0201)
+ *   activate-fw       Activate FW (opcode 0x0202)
+ *   get-health-info   Get Health Info (opcode 0x4200)
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -701,6 +703,182 @@ static int sdb_tunnel_transfer_fw(struct cxlmi_endpoint *ep,
 		return rc;
 
 	return transfer_fw_file(ep, &params, sdb_xfer_fw_send, &ctx);
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel activate-fw (inner opcode 0x0202)                       */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_activate_fw(struct cxlmi_endpoint *ep,
+				  int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr      hdr;
+		struct cxlmi_cci_msg           msg;
+		struct cxlmi_cmd_activate_fw_req payload;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_activate_fw_req act;
+	char *part_argv[16];
+	int part_argc = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (part_argc >= (int)(sizeof(part_argv) / sizeof(part_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel activate-fw: too many arguments\n");
+				return -1;
+			}
+			part_argv[part_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_activate_fw_req(part_argc, part_argv, &act);
+	if (rc)
+		return rc;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+
+	req.msg.command     = 0x02; /* ACTIVATE */
+	req.msg.command_set = 0x02; /* FIRMWARE_UPDATE */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] = (uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+
+	req.payload.action = act.action;
+	req.payload.slot = act.slot;
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel activate-fw failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel activate-fw ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (!sdb_xfer_fw_inner_ok(rsp.msg.return_code)) {
+		fprintf(stderr,
+			"sdb-tunnel activate-fw: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	print_activate_fw_result(&act, (int)rsp.msg.return_code);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel get-health-info (inner opcode 0x4200)                 */
+/* ------------------------------------------------------------------ */
+
+static void sdb_parse_memdev_health_info_rsp(
+	const struct cxlmi_cmd_memdev_get_health_info_rsp *wire,
+	struct cxlmi_cmd_memdev_get_health_info_rsp *host)
+{
+	memset(host, 0, sizeof(*host));
+	host->health_status = wire->health_status;
+	host->media_status = wire->media_status;
+	host->additional_status = wire->additional_status;
+	host->life_used = wire->life_used;
+	host->device_temperature = le16_to_cpu(wire->device_temperature);
+	host->dirty_shutdown_count = le32_to_cpu(wire->dirty_shutdown_count);
+	host->corrected_volatile_error_count =
+		le32_to_cpu(wire->corrected_volatile_error_count);
+	host->corrected_persistent_error_count =
+		le32_to_cpu(wire->corrected_persistent_error_count);
+}
+
+static int sdb_tunnel_get_health_info(struct cxlmi_endpoint *ep,
+				      int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+		struct cxlmi_cmd_memdev_get_health_info_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_memdev_get_health_info_rsp hi;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel get-health-info [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x00; /* GET_HEALTH_INFO    */
+	req.msg.command_set = 0x42; /* HEALTH_INFO_ALERTS */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel get-health-info failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel get-health-info ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel get-health-info: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	sdb_parse_memdev_health_info_rsp(&rsp.rsp, &hi);
+	print_memdev_health_info(&hi);
+	return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1601,6 +1779,9 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  get-fw-info        [--port <vdm0|vdm1|i3c>]                        Get FW Info (0x0200)\n"
 			"  transfer-fw        [--port <vdm0|vdm1|i3c>] --input <file> --slot <n> [--chunk-size <n>]\n"
 			"                                                                         Transfer FW (0x0201)\n"
+			"  activate-fw        [--port <vdm0|vdm1|i3c>] --slot <n> [--action online|offline]\n"
+			"                                                                         Activate FW (0x0202)\n"
+			"  get-health-info    [--port <vdm0|vdm1|i3c>]                        Get Health Info (0x4200)\n"
 			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
 			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
 			"  bg-op-abort          [--port <vmd0|vmd1|i3c>]                                          Request Abort Background Operation (0x0005)\n"
@@ -1625,6 +1806,10 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_get_fw_info(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "transfer-fw") == 0)
 		return sdb_tunnel_transfer_fw(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "activate-fw") == 0)
+		return sdb_tunnel_activate_fw(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-health-info") == 0)
+		return sdb_tunnel_get_health_info(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "bg-op-abort") == 0)
 		return sdb_tunnel_bg_op_abort(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-resp-msg-limit") == 0)
@@ -1646,7 +1831,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");
