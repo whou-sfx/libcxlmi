@@ -26,6 +26,10 @@ static const struct subcmd subcmds[] = {
 	  "Activate FW (0202h) --slot <n> [--action online|offline]" },
 	{ "get-health-info",           cmd_get_health_info,
 	  "Get Health Info (4200h)" },
+	{ "get-alert-config",          cmd_get_alert_config,
+	  "Get Alert Configuration (4201h)" },
+	{ "set-alert-config",          cmd_set_alert_config,
+	  "Set Alert Configuration (4202h) [--life-used-warning <pct>] [--over-temp-warning <n>] ..." },
 	{ "get-event-records",         cmd_get_event_records,
 	  "Get Event Records (0100h) --log <info|warn|failure|fatal|dcd>" },
 	{ "clear-event-records",       cmd_clear_event_records,
@@ -47,7 +51,7 @@ static const struct subcmd subcmds[] = {
 	{ "set-timestamp",             cmd_set_timestamp,
 	  "Set device timestamp (0301h) [--ts <ns>] (default: current host time)" },
 	{ "sdb-tunnel",                cmd_sdb_tunnel,
-	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|activate-fw|get-health-info|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
+	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|activate-fw|get-health-info|get-alert-config|set-alert-config|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);

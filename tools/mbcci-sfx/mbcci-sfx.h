@@ -63,6 +63,16 @@ int cmd_get_health_info(struct cxlmi_endpoint *ep, int argc, char **argv);
 void print_memdev_health_info(
 	const struct cxlmi_cmd_memdev_get_health_info_rsp *hi);
 
+int cmd_get_alert_config(struct cxlmi_endpoint *ep, int argc, char **argv);
+void print_memdev_alert_config(
+	const struct cxlmi_cmd_memdev_get_alert_config_rsp *ac);
+
+int parse_set_alert_config_req(int argc, char **argv,
+			       struct cxlmi_cmd_memdev_set_alert_config_req *req);
+void print_set_alert_config_result(
+	const struct cxlmi_cmd_memdev_set_alert_config_req *req);
+int cmd_set_alert_config(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_get_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_clear_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **argv);

@@ -24,6 +24,8 @@
  *   transfer-fw       Transfer FW (opcode 0x0201)
  *   activate-fw       Activate FW (opcode 0x0202)
  *   get-health-info   Get Health Info (opcode 0x4200)
+ *   get-alert-config  Get Alert Configuration (opcode 0x4201)
+ *   set-alert-config  Set Alert Configuration (opcode 0x4202)
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -878,6 +880,200 @@ static int sdb_tunnel_get_health_info(struct cxlmi_endpoint *ep,
 
 	sdb_parse_memdev_health_info_rsp(&rsp.rsp, &hi);
 	print_memdev_health_info(&hi);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel get-alert-config (inner opcode 0x4201)                */
+/* ------------------------------------------------------------------ */
+
+static void sdb_parse_memdev_get_alert_config_rsp(
+	const struct cxlmi_cmd_memdev_get_alert_config_rsp *wire,
+	struct cxlmi_cmd_memdev_get_alert_config_rsp *host)
+{
+	memset(host, 0, sizeof(*host));
+	host->valid_alerts = wire->valid_alerts;
+	host->programmable_alerts = wire->programmable_alerts;
+	host->life_used_critical_alert_threshold =
+		wire->life_used_critical_alert_threshold;
+	host->life_used_programmable_warning_threshold =
+		wire->life_used_programmable_warning_threshold;
+	host->device_over_temperature_critical_alert_threshold =
+		le16_to_cpu(wire->device_over_temperature_critical_alert_threshold);
+	host->device_under_temperature_critical_alert_threshold =
+		le16_to_cpu(wire->device_under_temperature_critical_alert_threshold);
+	host->device_over_temperature_programmable_warning_threshold =
+		le16_to_cpu(wire->device_over_temperature_programmable_warning_threshold);
+	host->device_under_temperature_programmable_warning_threshold =
+		le16_to_cpu(wire->device_under_temperature_programmable_warning_threshold);
+	host->corrected_volatile_mem_error_programmable_warning_threshold =
+		le16_to_cpu(wire->corrected_volatile_mem_error_programmable_warning_threshold);
+	host->corrected_persistent_mem_error_programmable_warning_threshold =
+		le16_to_cpu(wire->corrected_persistent_mem_error_programmable_warning_threshold);
+}
+
+static int sdb_tunnel_get_alert_config(struct cxlmi_endpoint *ep,
+				       int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+		struct cxlmi_cmd_memdev_get_alert_config_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_memdev_get_alert_config_rsp ac;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel get-alert-config [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x01; /* GET_ALERT_CONFIG   */
+	req.msg.command_set = 0x42; /* HEALTH_INFO_ALERTS */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel get-alert-config failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel get-alert-config ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel get-alert-config: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	sdb_parse_memdev_get_alert_config_rsp(&rsp.rsp, &ac);
+	print_memdev_alert_config(&ac);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel set-alert-config (inner opcode 0x4202)                */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_set_alert_config(struct cxlmi_endpoint *ep,
+				       int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                         hdr;
+		struct cxlmi_cci_msg                              msg;
+		struct cxlmi_cmd_memdev_set_alert_config_req      payload;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_memdev_set_alert_config_req ac;
+	char *alert_argv[16];
+	int alert_argc = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (alert_argc >= (int)(sizeof(alert_argv) / sizeof(alert_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel set-alert-config: too many arguments\n");
+				return -1;
+			}
+			alert_argv[alert_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_set_alert_config_req(alert_argc, alert_argv, &ac);
+	if (rc)
+		return rc;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+
+	req.msg.command     = 0x02; /* SET_ALERT_CONFIG   */
+	req.msg.command_set = 0x42; /* HEALTH_INFO_ALERTS */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] = (uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+
+	req.payload.valid_alert_actions = ac.valid_alert_actions;
+	req.payload.enable_alert_actions = ac.enable_alert_actions;
+	req.payload.life_used_programmable_warning_threshold =
+		ac.life_used_programmable_warning_threshold;
+	req.payload.device_over_temperature_programmable_warning_threshold =
+		cpu_to_le16(ac.device_over_temperature_programmable_warning_threshold);
+	req.payload.device_under_temperature_programmable_warning_threshold =
+		cpu_to_le16(ac.device_under_temperature_programmable_warning_threshold);
+	req.payload.corrected_volatile_mem_error_programmable_warning_threshold =
+		cpu_to_le16(ac.corrected_volatile_mem_error_programmable_warning_threshold);
+	req.payload.corrected_persistent_mem_error_programmable_warning_threshold =
+		cpu_to_le16(ac.corrected_persistent_mem_error_programmable_warning_threshold);
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel set-alert-config failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel set-alert-config ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel set-alert-config: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	print_set_alert_config_result(&ac);
 	return 0;
 }
 
@@ -1782,6 +1978,9 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  activate-fw        [--port <vdm0|vdm1|i3c>] --slot <n> [--action online|offline]\n"
 			"                                                                         Activate FW (0x0202)\n"
 			"  get-health-info    [--port <vdm0|vdm1|i3c>]                        Get Health Info (0x4200)\n"
+			"  get-alert-config   [--port <vdm0|vdm1|i3c>]                        Get Alert Configuration (0x4201)\n"
+			"  set-alert-config   [--port <vdm0|vdm1|i3c>] [--life-used-warning <pct>] [--over-temp-warning <n>] ...\n"
+			"                                                                         Set Alert Configuration (0x4202)\n"
 			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
 			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
 			"  bg-op-abort          [--port <vmd0|vmd1|i3c>]                                          Request Abort Background Operation (0x0005)\n"
@@ -1810,6 +2009,10 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_activate_fw(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-health-info") == 0)
 		return sdb_tunnel_get_health_info(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-alert-config") == 0)
+		return sdb_tunnel_get_alert_config(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "set-alert-config") == 0)
+		return sdb_tunnel_set_alert_config(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "bg-op-abort") == 0)
 		return sdb_tunnel_bg_op_abort(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-resp-msg-limit") == 0)
@@ -1831,7 +2034,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");
