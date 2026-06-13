@@ -249,7 +249,7 @@ int cmd_set_alert_config(struct cxlmi_endpoint *ep, int argc, char **argv)
 	struct cxlmi_cmd_memdev_set_alert_config_req req;
 	int rc;
 
-	rc = parse_set_alert_config_req(argc, argv, &req);
+	rc = parse_set_alert_config_req(argc - 1, argv + 1, &req);
 	if (rc)
 		return rc;
 
