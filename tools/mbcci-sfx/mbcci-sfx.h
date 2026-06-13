@@ -73,6 +73,21 @@ void print_set_alert_config_result(
 	const struct cxlmi_cmd_memdev_set_alert_config_req *req);
 int cmd_set_alert_config(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+void print_qos_telemetry_control(uint8_t val);
+void print_sld_qos_control(
+	const struct cxlmi_cmd_memdev_get_sld_qos_control_rsp *rsp);
+int cmd_get_sld_qos_ctrl(struct cxlmi_endpoint *ep, int argc, char **argv);
+
+int parse_set_sld_qos_ctrl_req(int argc, char **argv,
+			       struct cxlmi_cmd_memdev_set_sld_qos_control_req *req);
+void print_set_sld_qos_ctrl_result(
+	const struct cxlmi_cmd_memdev_set_sld_qos_control_req *req);
+int cmd_set_sld_qos_ctrl(struct cxlmi_endpoint *ep, int argc, char **argv);
+
+void print_sld_qos_status(
+	const struct cxlmi_cmd_memdev_get_sld_qos_status_rsp *rsp);
+int cmd_get_sld_qos_status(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_get_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_clear_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **argv);

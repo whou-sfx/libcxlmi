@@ -26,6 +26,9 @@
  *   get-health-info   Get Health Info (opcode 0x4200)
  *   get-alert-config  Get Alert Configuration (opcode 0x4201)
  *   set-alert-config  Set Alert Configuration (opcode 0x4202)
+ *   get-sld-qos-ctrl  Get SLD QoS Control (opcode 0x4700)
+ *   set-sld-qos-ctrl  Set SLD QoS Control (opcode 0x4701)
+ *   get-sld-qos-status Get SLD QoS Status (opcode 0x4702)
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -1078,6 +1081,237 @@ static int sdb_tunnel_set_alert_config(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel get-sld-qos-ctrl (inner opcode 0x4700)                */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_get_sld_qos_ctrl(struct cxlmi_endpoint *ep,
+				       int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+		struct cxlmi_cmd_memdev_get_sld_qos_control_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_memdev_get_sld_qos_control_rsp qos;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel get-sld-qos-ctrl [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x00; /* GET_SLD_QOS_CONTROL */
+	req.msg.command_set = 0x47; /* SLD_QOS_TELEMETRY  */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel get-sld-qos-ctrl failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel get-sld-qos-ctrl ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel get-sld-qos-ctrl: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	memcpy(&qos, &rsp.rsp, sizeof(qos));
+	print_sld_qos_control(&qos);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel set-sld-qos-ctrl (inner opcode 0x4701)                */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_set_sld_qos_ctrl(struct cxlmi_endpoint *ep,
+				       int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                         hdr;
+		struct cxlmi_cci_msg                              msg;
+		struct cxlmi_cmd_memdev_set_sld_qos_control_req   payload;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_memdev_set_sld_qos_control_req qos;
+	char *qos_argv[16];
+	int qos_argc = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (qos_argc >= (int)(sizeof(qos_argv) / sizeof(qos_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel set-sld-qos-ctrl: too many arguments\n");
+				return -1;
+			}
+			qos_argv[qos_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_set_sld_qos_ctrl_req(qos_argc, qos_argv, &qos);
+	if (rc)
+		return rc;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+
+	req.msg.command     = 0x01; /* SET_SLD_QOS_CONTROL */
+	req.msg.command_set = 0x47; /* SLD_QOS_TELEMETRY  */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] = (uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+
+	memcpy(&req.payload, &qos, sizeof(req.payload));
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel set-sld-qos-ctrl failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel set-sld-qos-ctrl ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel set-sld-qos-ctrl: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	print_set_sld_qos_ctrl_result(&qos);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel get-sld-qos-status (inner opcode 0x4702)              */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_get_sld_qos_status(struct cxlmi_endpoint *ep,
+					 int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+		struct cxlmi_cmd_memdev_get_sld_qos_status_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_memdev_get_sld_qos_status_rsp qos;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel get-sld-qos-status [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x02; /* GET_SLD_QOS_STATUS  */
+	req.msg.command_set = 0x47; /* SLD_QOS_TELEMETRY   */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel get-sld-qos-status failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel get-sld-qos-status ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel get-sld-qos-status: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	qos.backpressure_avg_percentage = rsp.rsp.backpressure_avg_percentage;
+	print_sld_qos_status(&qos);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* sdb-tunnel bg-op-abort (inner opcode 0x0005)                       */
 /* ------------------------------------------------------------------ */
 
@@ -1981,6 +2215,10 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  get-alert-config   [--port <vdm0|vdm1|i3c>]                        Get Alert Configuration (0x4201)\n"
 			"  set-alert-config   [--port <vdm0|vdm1|i3c>] [--life-used-warning <pct>] [--over-temp-warning <n>] ...\n"
 			"                                                                         Set Alert Configuration (0x4202)\n"
+			"  get-sld-qos-ctrl   [--port <vdm0|vdm1|i3c>]                        Get SLD QoS Control (0x4700)\n"
+			"  set-sld-qos-ctrl   [--port <vdm0|vdm1|i3c>] [--egress-congestion-control-enable <0|1>] [--egress-tpr-enable <0|1>] ...\n"
+			"                                                                         Set SLD QoS Control (0x4701)\n"
+			"  get-sld-qos-status [--port <vdm0|vdm1|i3c>]                        Get SLD QoS Status (0x4702)\n"
 			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
 			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
 			"  bg-op-abort          [--port <vmd0|vmd1|i3c>]                                          Request Abort Background Operation (0x0005)\n"
@@ -2013,6 +2251,12 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_get_alert_config(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "set-alert-config") == 0)
 		return sdb_tunnel_set_alert_config(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-sld-qos-ctrl") == 0)
+		return sdb_tunnel_get_sld_qos_ctrl(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "set-sld-qos-ctrl") == 0)
+		return sdb_tunnel_set_sld_qos_ctrl(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-sld-qos-status") == 0)
+		return sdb_tunnel_get_sld_qos_status(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "bg-op-abort") == 0)
 		return sdb_tunnel_bg_op_abort(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-resp-msg-limit") == 0)
@@ -2034,7 +2278,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");

@@ -30,6 +30,12 @@ static const struct subcmd subcmds[] = {
 	  "Get Alert Configuration (4201h)" },
 	{ "set-alert-config",          cmd_set_alert_config,
 	  "Set Alert Configuration (4202h) [--life-used-warning <pct>] [--over-temp-warning <n>] ..." },
+	{ "get-sld-qos-ctrl",          cmd_get_sld_qos_ctrl,
+	  "Get SLD QoS Control (4700h)" },
+	{ "set-sld-qos-ctrl",          cmd_set_sld_qos_ctrl,
+	  "Set SLD QoS Control (4701h) [--egress-congestion-control-enable <0|1>] [--egress-tpr-enable <0|1>] ..." },
+	{ "get-sld-qos-status",        cmd_get_sld_qos_status,
+	  "Get SLD QoS Status (4702h)" },
 	{ "get-event-records",         cmd_get_event_records,
 	  "Get Event Records (0100h) --log <info|warn|failure|fatal|dcd>" },
 	{ "clear-event-records",       cmd_clear_event_records,
@@ -51,7 +57,7 @@ static const struct subcmd subcmds[] = {
 	{ "set-timestamp",             cmd_set_timestamp,
 	  "Set device timestamp (0301h) [--ts <ns>] (default: current host time)" },
 	{ "sdb-tunnel",                cmd_sdb_tunnel,
-	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|activate-fw|get-health-info|get-alert-config|set-alert-config|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
+	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|activate-fw|get-health-info|get-alert-config|set-alert-config|get-sld-qos-ctrl|set-sld-qos-ctrl|get-sld-qos-status|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);
