@@ -57,7 +57,7 @@ static const struct subcmd subcmds[] = {
 	{ "set-timestamp",             cmd_set_timestamp,
 	  "Set device timestamp (0301h) [--ts <ns>] (default: current host time)" },
 	{ "sdb-tunnel",                cmd_sdb_tunnel,
-	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|activate-fw|get-health-info|get-alert-config|set-alert-config|get-sld-qos-ctrl|set-sld-qos-ctrl|get-sld-qos-status|fm-get-ld-info|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
+	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|activate-fw|get-health-info|get-alert-config|set-alert-config|get-sld-qos-ctrl|set-sld-qos-ctrl|get-sld-qos-status|fm-get-ld-info|fm-get-ld-alloc|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);

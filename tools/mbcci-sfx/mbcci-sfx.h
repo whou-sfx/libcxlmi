@@ -107,4 +107,9 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv);
 void print_qos_telemetry_capability(uint8_t val);
 void print_fm_get_ld_info(const struct cxlmi_cmd_fmapi_get_ld_info_rsp *rsp);
 
+int parse_fm_get_ld_alloc_req(int argc, char **argv,
+			      struct cxlmi_cmd_fmapi_get_ld_allocations_req *req);
+void print_fm_get_ld_alloc(
+	const struct cxlmi_cmd_fmapi_get_ld_allocations_rsp *rsp);
+
 #endif /* MBCCI_SFX_H */
