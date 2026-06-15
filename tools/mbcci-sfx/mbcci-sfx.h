@@ -99,6 +99,9 @@ int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_vendor_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+int cel_uuid_match(const uint8_t uuid[16]);
+void print_cel_log(const uint8_t *data, size_t len, uint32_t base_offset);
+
 int cmd_get_timestamp(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_set_timestamp(struct cxlmi_endpoint *ep, int argc, char **argv);
 

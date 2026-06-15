@@ -262,6 +262,8 @@ int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	if (has_text) {
 		fwrite(buf, 1, length, stdout);
+	} else if (cel_uuid_match(uuid_bytes)) {
+		print_cel_log(buf, length, offset);
 	} else {
 		for (uint32_t i = 0; i < length; i++) {
 			if (i % 16 == 0)
