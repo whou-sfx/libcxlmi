@@ -99,6 +99,25 @@ int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_vendor_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+struct get_log_params {
+	uint8_t uuid[16];
+	uint32_t offset;
+	uint32_t length;
+	int has_uuid;
+	int has_length;
+	int has_text;
+};
+
+void print_log_uuid(const uint8_t *uuid);
+void print_supported_logs(const struct cxlmi_cmd_get_supported_logs_rsp *rsp);
+int parse_log_uuid(const char *str, uint8_t *out);
+int parse_get_log_req(int argc, char **argv, struct get_log_params *params);
+uint32_t lookup_log_size(const struct cxlmi_cmd_get_supported_logs_rsp *srsp,
+			 const uint8_t uuid[16]);
+void print_log_header(const uint8_t uuid[16], uint32_t offset, uint32_t length);
+void print_log_payload(const uint8_t uuid[16], uint32_t offset, uint32_t length,
+			 const uint8_t *buf, int has_text);
+
 int cel_uuid_match(const uint8_t uuid[16]);
 void print_cel_log(const uint8_t *data, size_t len, uint32_t base_offset);
 

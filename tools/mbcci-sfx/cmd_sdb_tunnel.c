@@ -31,6 +31,8 @@
  *   get-sld-qos-status Get SLD QoS Status (opcode 0x4702)
  *   fm-get-ld-info    FM Get LD Info (opcode 0x5400)
  *   fm-get-ld-alloc   FM Get LD Allocations (opcode 0x5401)
+ *   get-supported-logs Get Supported Logs (opcode 0x0400)
+ *   get-log           Get Log (opcode 0x0401)
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -2412,6 +2414,279 @@ static int sdb_tunnel_fm_get_ld_alloc(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel get-supported-logs (inner opcode 0x0400)                */
+/* ------------------------------------------------------------------ */
+
+#define SDB_SUPPORTED_LOGS_RSP_SZ \
+	(sizeof(struct cxlmi_cmd_get_supported_logs_rsp) + \
+	 CXLMI_MAX_SUPPORTED_LOGS * sizeof(struct cxlmi_supported_log_entry))
+
+static void sdb_parse_supported_logs_rsp(
+	const struct cxlmi_cmd_get_supported_logs_rsp *wire,
+	struct cxlmi_cmd_get_supported_logs_rsp *host)
+{
+	uint16_t n;
+	int i;
+
+	memset(host, 0, SDB_SUPPORTED_LOGS_RSP_SZ);
+	n = le16_to_cpu(wire->num_supported_log_entries);
+	host->num_supported_log_entries = n;
+
+	for (i = 0; i < n; i++) {
+		memcpy(host->entries[i].uuid, wire->entries[i].uuid, 16);
+		host->entries[i].log_size =
+			le32_to_cpu(wire->entries[i].log_size);
+	}
+}
+
+static int sdb_tunnel_fetch_supported_logs(struct cxlmi_endpoint *ep,
+					   uint8_t port_id,
+					   struct cxlmi_cmd_get_supported_logs_rsp *host)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+	} __attribute__((packed)) req;
+
+	uint8_t *rsp_buf;
+	struct cxlmi_cci_msg *inner_rsp;
+	struct cxlmi_cmd_get_supported_logs_rsp *wire_rsp;
+	size_t rsp_buf_sz;
+	int rc;
+
+	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		     sizeof(struct cxlmi_cci_msg) +
+		     SDB_SUPPORTED_LOGS_RSP_SZ;
+	rsp_buf = calloc(1, rsp_buf_sz);
+	if (!rsp_buf)
+		return -1;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x00; /* GET_SUPPORTED_LOGS */
+	req.msg.command_set = 0x04; /* LOGS               */
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       rsp_buf, rsp_buf_sz);
+	if (rc) {
+		free(rsp_buf);
+		return rc;
+	}
+
+	inner_rsp = (struct cxlmi_cci_msg *)(rsp_buf +
+					    sizeof(struct sdb_tunnel_rsp_hdr));
+	if (inner_rsp->return_code != 0) {
+		rc = (int)inner_rsp->return_code;
+		free(rsp_buf);
+		return rc;
+	}
+
+	wire_rsp = (struct cxlmi_cmd_get_supported_logs_rsp *)inner_rsp->payload;
+	sdb_parse_supported_logs_rsp(wire_rsp, host);
+	free(rsp_buf);
+	return 0;
+}
+
+static int sdb_tunnel_get_supported_logs(struct cxlmi_endpoint *ep,
+				       int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+	} __attribute__((packed)) req;
+
+	struct cxlmi_cmd_get_supported_logs_rsp *rsp;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	rsp = calloc(1, SDB_SUPPORTED_LOGS_RSP_SZ);
+	if (!rsp) {
+		fprintf(stderr, "sdb-tunnel get-supported-logs: out of memory\n");
+		return -1;
+	}
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0) {
+				free(rsp);
+				return -1;
+			}
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel get-supported-logs [--port <vdm0|vdm1|i3c>]\n");
+			free(rsp);
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x00; /* GET_SUPPORTED_LOGS */
+	req.msg.command_set = 0x04; /* LOGS               */
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = sdb_tunnel_fetch_supported_logs(ep, port_id, rsp);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr,
+				"sdb-tunnel get-supported-logs failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel get-supported-logs ioctl failed\n");
+		free(rsp);
+		return rc;
+	}
+
+	print_supported_logs(rsp);
+	free(rsp);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel get-log (inner opcode 0x0401)                           */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_get_log(struct cxlmi_endpoint *ep, int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr     hdr;
+		struct cxlmi_cci_msg        msg;
+		struct cxlmi_cmd_get_log_req payload;
+	} __attribute__((packed)) req;
+
+	struct get_log_params params;
+	char *log_argv[16];
+	int log_argc = 0;
+	uint8_t *rsp_buf = NULL;
+	struct cxlmi_cci_msg *inner_rsp;
+	uint8_t *log_data;
+	struct cxlmi_cmd_get_supported_logs_rsp *srsp;
+	size_t rsp_buf_sz;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	memset(&params, 0, sizeof(params));
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (log_argc >= (int)(sizeof(log_argv) / sizeof(log_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel get-log: too many arguments\n");
+				return -1;
+			}
+			log_argv[log_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_get_log_req(log_argc, log_argv, &params);
+	if (rc)
+		return rc;
+
+	if (!params.has_length) {
+		srsp = calloc(1, SDB_SUPPORTED_LOGS_RSP_SZ);
+		if (!srsp) {
+			fprintf(stderr, "sdb-tunnel get-log: out of memory\n");
+			return -1;
+		}
+		rc = sdb_tunnel_fetch_supported_logs(ep, port_id, srsp);
+		if (rc) {
+			if (rc > 0)
+				fprintf(stderr,
+					"sdb-tunnel get-log: get-supported-logs failed: %s\n",
+					cxlmi_cmd_retcode_tostr(rc));
+			else
+				fprintf(stderr,
+					"sdb-tunnel get-log: get-supported-logs ioctl failed\n");
+			free(srsp);
+			return rc;
+		}
+		params.length = lookup_log_size(srsp, params.uuid);
+		free(srsp);
+
+		if (params.length == 0) {
+			fprintf(stderr,
+				"sdb-tunnel get-log: UUID not found in supported logs list\n");
+			return -1;
+		}
+	}
+
+	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		     sizeof(struct cxlmi_cci_msg) +
+		     params.length;
+	rsp_buf = calloc(1, rsp_buf_sz);
+	if (!rsp_buf) {
+		fprintf(stderr, "sdb-tunnel get-log: out of memory\n");
+		return -1;
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+
+	req.msg.command     = 0x01; /* GET_LOG */
+	req.msg.command_set = 0x04; /* LOGS    */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] = (uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+
+	memcpy(req.payload.uuid, params.uuid, sizeof(req.payload.uuid));
+	req.payload.offset = cpu_to_le32(params.offset);
+	req.payload.length = cpu_to_le32(params.length);
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       rsp_buf, rsp_buf_sz);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel get-log failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel get-log ioctl failed\n");
+		free(rsp_buf);
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", rsp_buf, rsp_buf_sz);
+
+	inner_rsp = (struct cxlmi_cci_msg *)(rsp_buf +
+					    sizeof(struct sdb_tunnel_rsp_hdr));
+	if (inner_rsp->return_code != 0) {
+		uint16_t ret = inner_rsp->return_code;
+
+		fprintf(stderr,
+			"sdb-tunnel get-log: inner CCI error 0x%04x\n", ret);
+		free(rsp_buf);
+		return (int)ret;
+	}
+
+	log_data = inner_rsp->payload;
+	print_log_header(params.uuid, params.offset, params.length);
+	print_log_payload(params.uuid, params.offset, params.length, log_data,
+			  params.has_text);
+
+	free(rsp_buf);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -2441,6 +2716,9 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  fm-get-ld-info     [--port <vdm0|vdm1|i3c>]                        FM Get LD Info (0x5400)\n"
 			"  fm-get-ld-alloc    [--port <vdm0|vdm1|i3c>] [--start-ld-id <n>] [--limit <n>]\n"
 			"                                                                         FM Get LD Allocations (0x5401)\n"
+			"  get-supported-logs [--port <vdm0|vdm1|i3c>]                        Get Supported Logs (0x0400)\n"
+			"  get-log            [--port <vdm0|vdm1|i3c>] --uuid <uuid> [--offset <n>] [--length <n>] [--text]\n"
+			"                                                                         Get Log (0x0401)\n"
 			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
 			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
 			"  bg-op-abort          [--port <vmd0|vmd1|i3c>]                                          Request Abort Background Operation (0x0005)\n"
@@ -2483,6 +2761,10 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_fm_get_ld_info(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "fm-get-ld-alloc") == 0)
 		return sdb_tunnel_fm_get_ld_alloc(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-supported-logs") == 0)
+		return sdb_tunnel_get_supported_logs(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-log") == 0)
+		return sdb_tunnel_get_log(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "bg-op-abort") == 0)
 		return sdb_tunnel_bg_op_abort(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-resp-msg-limit") == 0)
@@ -2504,7 +2786,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, get-supported-logs, get-log, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");

@@ -64,7 +64,7 @@ static const char *lookup_uuid_name(const uint8_t *uuid)
 }
 
 /* Print UUID in standard 8-4-4-4-12 format. */
-static void print_uuid(const uint8_t *uuid)
+void print_log_uuid(const uint8_t *uuid)
 {
 	printf("%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-"
 	       "%02x%02x%02x%02x%02x%02x",
@@ -98,10 +98,24 @@ fetch_supported_logs(struct cxlmi_endpoint *ep)
 	return rsp;
 }
 
+void print_supported_logs(const struct cxlmi_cmd_get_supported_logs_rsp *rsp)
+{
+	uint16_t n = rsp->num_supported_log_entries;
+	uint16_t i;
+
+	printf("Supported log entries: %u\n", n);
+	for (i = 0; i < n; i++) {
+		printf("  [%u] UUID: ", i);
+		print_log_uuid(rsp->entries[i].uuid);
+		printf("  log_size: %7u bytes  (%s)\n",
+		       rsp->entries[i].log_size,
+		       lookup_uuid_name(rsp->entries[i].uuid));
+	}
+}
+
 int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv)
 {
 	struct cxlmi_cmd_get_supported_logs_rsp *rsp;
-	uint16_t n, i;
 
 	(void)argc;
 	(void)argv;
@@ -112,16 +126,7 @@ int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return -1;
 	}
 
-	n = rsp->num_supported_log_entries;
-	printf("Supported log entries: %u\n", n);
-	for (i = 0; i < n; i++) {
-		printf("  [%u] UUID: ", i);
-		print_uuid(rsp->entries[i].uuid);
-		printf("  log_size: %7u bytes  (%s)\n",
-		       rsp->entries[i].log_size,
-		       lookup_uuid_name(rsp->entries[i].uuid));
-	}
-
+	print_supported_logs(rsp);
 	free(rsp);
 	return 0;
 }
@@ -132,7 +137,7 @@ int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv)
  *   - 32-char hex without dashes:  0da9c0b5bf414b788f7996b1623b3f17
  *   - 36-char standard format:     0da9c0b5-bf41-4b78-8f79-96b1623b3f17
  */
-static int parse_uuid(const char *str, uint8_t *out)
+int parse_log_uuid(const char *str, uint8_t *out)
 {
 	char hex[33] = { 0 };
 	int j = 0;
@@ -165,27 +170,24 @@ static int parse_uuid(const char *str, uint8_t *out)
 	return 0;
 }
 
-int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv)
+int parse_get_log_req(int argc, char **argv, struct get_log_params *params)
 {
-	struct cxlmi_cmd_get_log_req req = { 0 };
-	uint8_t uuid_bytes[16] = { 0 };
-	int has_uuid = 0, has_length = 0, has_text = 0;
-	uint32_t offset = 0, length = 0;
-	uint8_t *buf = NULL;
-	int rc = -1, a;
+	int i;
 
-	for (a = 1; a < argc; a++) {
-		if (strcmp(argv[a], "--uuid") == 0 && a + 1 < argc) {
-			if (parse_uuid(argv[++a], uuid_bytes) != 0)
+	memset(params, 0, sizeof(*params));
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--uuid") == 0 && i + 1 < argc) {
+			if (parse_log_uuid(argv[++i], params->uuid) != 0)
 				return -1;
-			has_uuid = 1;
-		} else if (strcmp(argv[a], "--offset") == 0 && a + 1 < argc) {
-			offset = (uint32_t)strtoul(argv[++a], NULL, 0);
-		} else if (strcmp(argv[a], "--length") == 0 && a + 1 < argc) {
-			length = (uint32_t)strtoul(argv[++a], NULL, 0);
-			has_length = 1;
-		} else if (strcmp(argv[a], "--text") == 0) {
-			has_text = 1;
+			params->has_uuid = 1;
+		} else if (strcmp(argv[i], "--offset") == 0 && i + 1 < argc) {
+			params->offset = (uint32_t)strtoul(argv[++i], NULL, 0);
+		} else if (strcmp(argv[i], "--length") == 0 && i + 1 < argc) {
+			params->length = (uint32_t)strtoul(argv[++i], NULL, 0);
+			params->has_length = 1;
+		} else if (strcmp(argv[i], "--text") == 0) {
+			params->has_text = 1;
 		} else {
 			fprintf(stderr,
 				"Usage: get-log --uuid <uuid> [--offset <n>] [--length <n>] [--text]\n");
@@ -193,7 +195,7 @@ int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv)
 		}
 	}
 
-	if (!has_uuid) {
+	if (!params->has_uuid) {
 		fprintf(stderr,
 			"Usage: get-log --uuid <uuid> [--offset <n>] [--length <n>] [--text]\n"
 			"  --uuid    log UUID (32-char hex or xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)\n"
@@ -203,37 +205,90 @@ int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return -1;
 	}
 
-	/* If length not specified, look it up from get-supported-logs. */
-	if (!has_length) {
+	return 0;
+}
+
+uint32_t lookup_log_size(const struct cxlmi_cmd_get_supported_logs_rsp *srsp,
+			 const uint8_t uuid[16])
+{
+	uint16_t i;
+
+	for (i = 0; i < srsp->num_supported_log_entries; i++) {
+		if (memcmp(srsp->entries[i].uuid, uuid, 16) == 0)
+			return srsp->entries[i].log_size;
+	}
+	return 0;
+}
+
+void print_log_header(const uint8_t uuid[16], uint32_t offset, uint32_t length)
+{
+	fprintf(stderr,
+		"Log UUID: %02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x"
+		"  (%s)\nOffset: %u  Length: %u\n",
+		uuid[0],  uuid[1],  uuid[2],  uuid[3],
+		uuid[4],  uuid[5],
+		uuid[6],  uuid[7],
+		uuid[8],  uuid[9],
+		uuid[10], uuid[11], uuid[12],
+		uuid[13], uuid[14], uuid[15],
+		lookup_uuid_name(uuid), offset, length);
+}
+
+void print_log_payload(const uint8_t uuid[16], uint32_t offset, uint32_t length,
+		       const uint8_t *buf, int has_text)
+{
+	uint32_t i;
+
+	if (has_text) {
+		fwrite(buf, 1, length, stdout);
+	} else if (cel_uuid_match(uuid)) {
+		print_cel_log(buf, length, offset);
+	} else {
+		for (i = 0; i < length; i++) {
+			if (i % 16 == 0)
+				printf("%04x: ", offset + i);
+			printf("%02x ", buf[i]);
+			if ((i + 1) % 16 == 0 || i + 1 == length)
+				printf("\n");
+		}
+	}
+}
+
+int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv)
+{
+	struct cxlmi_cmd_get_log_req req = { 0 };
+	struct get_log_params params;
+	uint8_t *buf = NULL;
+	int rc;
+
+	rc = parse_get_log_req(argc - 1, argv + 1, &params);
+	if (rc)
+		return rc;
+
+	if (!params.has_length) {
 		struct cxlmi_cmd_get_supported_logs_rsp *srsp =
 			fetch_supported_logs(ep);
-		uint16_t i;
 
 		if (!srsp) {
 			fprintf(stderr,
 				"get-log: cannot determine log size (get-supported-logs failed)\n");
 			return -1;
 		}
-		for (i = 0; i < srsp->num_supported_log_entries; i++) {
-			if (memcmp(srsp->entries[i].uuid, uuid_bytes, 16) == 0) {
-				length = srsp->entries[i].log_size;
-				break;
-			}
-		}
+		params.length = lookup_log_size(srsp, params.uuid);
 		free(srsp);
 
-		if (length == 0) {
+		if (params.length == 0) {
 			fprintf(stderr,
 				"get-log: UUID not found in supported logs list\n");
 			return -1;
 		}
 	}
 
-	memcpy(req.uuid, uuid_bytes, 16);
-	req.offset = offset;
-	req.length = length;
+	memcpy(req.uuid, params.uuid, 16);
+	req.offset = params.offset;
+	req.length = params.length;
 
-	buf = calloc(1, length);
+	buf = calloc(1, params.length);
 	if (!buf) {
 		fprintf(stderr, "get-log: out of memory\n");
 		return -1;
@@ -250,29 +305,9 @@ int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return rc;
 	}
 
-	fprintf(stderr, "Log UUID: %02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x"
-		"  (%s)\nOffset: %u  Length: %u\n",
-		uuid_bytes[0],  uuid_bytes[1],  uuid_bytes[2],  uuid_bytes[3],
-		uuid_bytes[4],  uuid_bytes[5],
-		uuid_bytes[6],  uuid_bytes[7],
-		uuid_bytes[8],  uuid_bytes[9],
-		uuid_bytes[10], uuid_bytes[11], uuid_bytes[12],
-		uuid_bytes[13], uuid_bytes[14], uuid_bytes[15],
-		lookup_uuid_name(uuid_bytes), offset, length);
-
-	if (has_text) {
-		fwrite(buf, 1, length, stdout);
-	} else if (cel_uuid_match(uuid_bytes)) {
-		print_cel_log(buf, length, offset);
-	} else {
-		for (uint32_t i = 0; i < length; i++) {
-			if (i % 16 == 0)
-				printf("%04x: ", offset + i);
-			printf("%02x ", buf[i]);
-			if ((i + 1) % 16 == 0 || i + 1 == length)
-				printf("\n");
-		}
-	}
+	print_log_header(params.uuid, params.offset, params.length);
+	print_log_payload(params.uuid, params.offset, params.length, buf,
+			  params.has_text);
 
 	free(buf);
 	return 0;
