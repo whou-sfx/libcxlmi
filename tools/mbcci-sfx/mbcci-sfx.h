@@ -99,6 +99,17 @@ int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_vendor_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+#define MBCCI_FEATURE_ENTRY_SZ 48
+#define MBCCI_FEATURE_DEFAULT_COUNT (16 * MBCCI_FEATURE_ENTRY_SZ)
+#define MBCCI_FEATURE_RSP_BUF_SZ(count) \
+	(sizeof(struct cxlmi_cmd_get_supported_features_rsp) + (count))
+
+int cmd_get_supported_feat(struct cxlmi_endpoint *ep, int argc, char **argv);
+int parse_get_supported_features_req(int argc, char **argv,
+				     struct cxlmi_cmd_get_supported_features_req *req);
+void print_supported_features(
+	const struct cxlmi_cmd_get_supported_features_rsp *rsp);
+
 struct get_log_params {
 	uint8_t uuid[16];
 	uint32_t offset;

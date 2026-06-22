@@ -33,6 +33,7 @@
  *   fm-get-ld-alloc   FM Get LD Allocations (opcode 0x5401)
  *   get-supported-logs Get Supported Logs (opcode 0x0400)
  *   get-log           Get Log (opcode 0x0401)
+ *   get-supported-feat Get Supported Features (opcode 0x0500)
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -2554,6 +2555,159 @@ static int sdb_tunnel_get_supported_logs(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel get-supported-feat (inner opcode 0x0500)                */
+/* ------------------------------------------------------------------ */
+
+static void sdb_parse_supported_features_rsp(
+	const struct cxlmi_cmd_get_supported_features_rsp *wire,
+	struct cxlmi_cmd_get_supported_features_rsp *host,
+	uint32_t count_bytes)
+{
+	uint16_t n;
+	int i;
+
+	memset(host, 0, MBCCI_FEATURE_RSP_BUF_SZ(count_bytes));
+	n = le16_to_cpu(wire->num_supported_feature_entries);
+	host->num_supported_feature_entries = n;
+	host->device_supported_features =
+		le16_to_cpu(wire->device_supported_features);
+
+	for (i = 0; i < n; i++) {
+		memcpy(host->supported_feature_entries[i].feature_id,
+		       wire->supported_feature_entries[i].feature_id,
+		       sizeof(wire->supported_feature_entries[i].feature_id));
+		host->supported_feature_entries[i].feature_index =
+			le16_to_cpu(wire->supported_feature_entries[i].feature_index);
+		host->supported_feature_entries[i].get_feature_size =
+			le16_to_cpu(wire->supported_feature_entries[i].get_feature_size);
+		host->supported_feature_entries[i].set_feature_size =
+			le16_to_cpu(wire->supported_feature_entries[i].set_feature_size);
+		host->supported_feature_entries[i].attribute_flags =
+			le32_to_cpu(wire->supported_feature_entries[i].attribute_flags);
+		host->supported_feature_entries[i].get_feature_version =
+			wire->supported_feature_entries[i].get_feature_version;
+		host->supported_feature_entries[i].set_feature_version =
+			wire->supported_feature_entries[i].set_feature_version;
+		host->supported_feature_entries[i].set_feature_effects =
+			le16_to_cpu(wire->supported_feature_entries[i].set_feature_effects);
+	}
+}
+
+static int sdb_tunnel_fetch_supported_features(
+	struct cxlmi_endpoint *ep, uint8_t port_id,
+	const struct cxlmi_cmd_get_supported_features_req *in,
+	struct cxlmi_cmd_get_supported_features_rsp *host)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+		struct cxlmi_cmd_get_supported_features_req payload;
+	} __attribute__((packed)) req;
+
+	uint8_t *rsp_buf;
+	struct cxlmi_cci_msg *inner_rsp;
+	struct cxlmi_cmd_get_supported_features_rsp *wire_rsp;
+	size_t rsp_buf_sz;
+	int rc;
+
+	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		     sizeof(struct cxlmi_cci_msg) +
+		     MBCCI_FEATURE_RSP_BUF_SZ(in->count);
+	rsp_buf = calloc(1, rsp_buf_sz);
+	if (!rsp_buf)
+		return -1;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+
+	req.msg.command     = 0x00; /* GET_SUPPORTED_FEATURES */
+	req.msg.command_set = 0x05; /* FEATURES               */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] = (uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+	req.msg.pl_length[2] = (uint8_t)((sizeof(req.payload) >> 16) & 0xff);
+
+	req.payload.count = cpu_to_le32(in->count);
+	req.payload.starting_feature_index = cpu_to_le16(in->starting_feature_index);
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       rsp_buf, rsp_buf_sz);
+	if (rc) {
+		free(rsp_buf);
+		return rc;
+	}
+
+	inner_rsp = (struct cxlmi_cci_msg *)(rsp_buf +
+					    sizeof(struct sdb_tunnel_rsp_hdr));
+	if (inner_rsp->return_code != 0) {
+		rc = (int)inner_rsp->return_code;
+		free(rsp_buf);
+		return rc;
+	}
+
+	wire_rsp = (struct cxlmi_cmd_get_supported_features_rsp *)inner_rsp->payload;
+	sdb_parse_supported_features_rsp(wire_rsp, host, in->count);
+	free(rsp_buf);
+	return 0;
+}
+
+static int sdb_tunnel_get_supported_feat(struct cxlmi_endpoint *ep,
+					 int argc, char **argv)
+{
+	struct cxlmi_cmd_get_supported_features_req req;
+	struct cxlmi_cmd_get_supported_features_rsp *rsp;
+	char *feat_argv[16];
+	int feat_argc = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (feat_argc >= (int)(sizeof(feat_argv) / sizeof(feat_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel get-supported-feat: too many arguments\n");
+				return -1;
+			}
+			feat_argv[feat_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_get_supported_features_req(feat_argc, feat_argv, &req);
+	if (rc)
+		return rc;
+
+	rsp = calloc(1, MBCCI_FEATURE_RSP_BUF_SZ(req.count));
+	if (!rsp) {
+		fprintf(stderr, "sdb-tunnel get-supported-feat: out of memory\n");
+		return -1;
+	}
+
+	rc = sdb_tunnel_fetch_supported_features(ep, port_id, &req, rsp);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr,
+				"sdb-tunnel get-supported-feat failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel get-supported-feat ioctl failed\n");
+		free(rsp);
+		return rc;
+	}
+
+	print_supported_features(rsp);
+	free(rsp);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* sdb-tunnel get-log (inner opcode 0x0401)                           */
 /* ------------------------------------------------------------------ */
 
@@ -2717,6 +2871,8 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  fm-get-ld-alloc    [--port <vdm0|vdm1|i3c>] [--start-ld-id <n>] [--limit <n>]\n"
 			"                                                                         FM Get LD Allocations (0x5401)\n"
 			"  get-supported-logs [--port <vdm0|vdm1|i3c>]                        Get Supported Logs (0x0400)\n"
+			"  get-supported-feat [--port <vdm0|vdm1|i3c>] [--count <bytes>] [--start-index <n>]\n"
+			"                                                                         Get Supported Features (0x0500)\n"
 			"  get-log            [--port <vdm0|vdm1|i3c>] --uuid <uuid> [--offset <n>] [--length <n>] [--text]\n"
 			"                                                                         Get Log (0x0401)\n"
 			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
@@ -2763,6 +2919,8 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_fm_get_ld_alloc(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-supported-logs") == 0)
 		return sdb_tunnel_get_supported_logs(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-supported-feat") == 0)
+		return sdb_tunnel_get_supported_feat(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-log") == 0)
 		return sdb_tunnel_get_log(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "bg-op-abort") == 0)
@@ -2786,7 +2944,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, get-supported-logs, get-log, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, get-supported-logs, get-supported-feat, get-log, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");
