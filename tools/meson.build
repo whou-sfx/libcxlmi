@@ -3,3 +3,4 @@
 # This file is part of libcxlmi.
 #
 subdir('mbcci-sfx')
+subdir('mctp-cci')

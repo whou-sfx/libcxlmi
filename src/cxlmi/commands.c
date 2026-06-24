@@ -16,6 +16,8 @@
 
 /* Max poison records to retrieve - based on typical mailbox sizes */
 #define MAX_POISON_RECORDS 256
+/* CXL r3.1 Get Poison List output payload fixed header (no records). */
+#define POISON_LIST_RSP_HDR_SZ 0x20
 
 /* Max scan media error records - same as poison records */
 #define MAX_SCAN_MEDIA_RECORDS 256
@@ -1343,7 +1345,9 @@ cxlmi_cmd_get_poison_list(struct cxlmi_endpoint *ep,
 	struct cxlmi_cmd_memdev_get_poison_list_rsp *rsp_pl;
 	_cleanup_free_ struct cxlmi_cci_msg *req = NULL;
 	_cleanup_free_ struct cxlmi_cci_msg *rsp = NULL;
-	ssize_t req_sz, rsp_sz;
+	ssize_t req_sz, rsp_sz, rsp_sz_min;
+	uint16_t record_cnt;
+	size_t records_in_rsp;
 	int i, rc = -1;
 
 	req_sz = sizeof(*req) + sizeof(*in);
@@ -1357,13 +1361,14 @@ cxlmi_cmd_get_poison_list(struct cxlmi_endpoint *ep,
 	req_pl->get_poison_list_phy_addr = cpu_to_le64(in->get_poison_list_phy_addr);
 	req_pl->get_poison_list_phy_addr_len = cpu_to_le64(in->get_poison_list_phy_addr_len);
 
+	rsp_sz_min = sizeof(*rsp) + POISON_LIST_RSP_HDR_SZ;
 	rsp_sz = sizeof(*rsp) + sizeof(*rsp_pl) +
 		 (MAX_POISON_RECORDS * sizeof(rsp_pl->records[0]));
 	rsp = calloc(1, rsp_sz);
 	if (!rsp)
 		return -1;
 
-	rc = send_cmd_cci(ep, ti, req, req_sz, rsp, rsp_sz, rsp_sz);
+	rc = send_cmd_cci(ep, ti, req, req_sz, rsp, rsp_sz, rsp_sz_min);
 	if (rc)
 		return rc;
 
@@ -1373,9 +1378,23 @@ cxlmi_cmd_get_poison_list(struct cxlmi_endpoint *ep,
 	ret->poison_list_flags = rsp_pl->poison_list_flags;
 	ret->overflow_timestamp =
 		le64_to_cpu(rsp_pl->overflow_timestamp);
-	ret->more_err_media_record_cnt = le16_to_cpu(rsp_pl->more_err_media_record_cnt);
 
-	for (i = 0; i < ret->more_err_media_record_cnt; i++) {
+	record_cnt = le16_to_cpu(rsp_pl->more_err_media_record_cnt);
+	records_in_rsp = 0;
+	if (rsp->pl_length[0] || rsp->pl_length[1] || (rsp->pl_length[2] & 0xf)) {
+		uint32_t pl_length = rsp->pl_length[0] |
+			(rsp->pl_length[1] << 8) |
+			((rsp->pl_length[2] & 0xf) << 16);
+
+		if (pl_length > POISON_LIST_RSP_HDR_SZ)
+			records_in_rsp = (pl_length - POISON_LIST_RSP_HDR_SZ) /
+				sizeof(rsp_pl->records[0]);
+	}
+	record_cnt = min_t(uint16_t, record_cnt, records_in_rsp);
+	record_cnt = min_t(uint16_t, record_cnt, MAX_POISON_RECORDS);
+	ret->more_err_media_record_cnt = record_cnt;
+
+	for (i = 0; i < record_cnt; i++) {
 		ret->records[i].media_err_addr =
 			le64_to_cpu(rsp_pl->records[i].media_err_addr);
 		ret->records[i].media_err_len =
