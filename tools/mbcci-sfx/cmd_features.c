@@ -284,6 +284,36 @@ uint16_t lookup_feature_size(
 	return 0;
 }
 
+/*
+ * Documented Get Feature Size from docs/cxl_features.md / CXL_JEDEC_Tables.md.
+ * Returns 0 for variable-size features (e.g. DDR5 ECS n*4+1) — caller must
+ * query the device via Get Supported Features (0500h) or accept --count.
+ */
+uint16_t lookup_feature_size_doc(const uint8_t feature_id[16])
+{
+	switch (mbcci_feature_kind(feature_id)) {
+	case MBCCI_FEAT_SPPR:
+	case MBCCI_FEAT_HPPR:
+		return 20;
+	case MBCCI_FEAT_PARTIAL_SCRUB:
+		return 4;
+	case MBCCI_FEAT_DDR5_ECS:
+		return 0;
+	case MBCCI_FEAT_CVME:
+		return 32;
+	case MBCCI_FEAT_ADDRESS_POLICY:
+		return 2;
+	case MBCCI_FEAT_RAS:
+		return 19;
+	case MBCCI_FEAT_CMC_REFRESH:
+		return 2;
+	case MBCCI_FEAT_DUAL_PORT:
+		return 33;
+	default:
+		return 0;
+	}
+}
+
 static uint16_t mailbox_lookup_feature_size(struct cxlmi_endpoint *ep,
 					    const uint8_t feature_id[16])
 {
@@ -301,6 +331,18 @@ static uint16_t mailbox_lookup_feature_size(struct cxlmi_endpoint *ep,
 	size = lookup_feature_size(sfrsp, feature_id);
 	free(sfrsp);
 	return size;
+}
+
+uint16_t resolve_get_feature_count(struct cxlmi_endpoint *ep,
+				   const uint8_t feature_id[16])
+{
+	uint16_t size;
+
+	size = lookup_feature_size_doc(feature_id);
+	if (size)
+		return size;
+
+	return mailbox_lookup_feature_size(ep, feature_id);
 }
 
 void print_feature_header(const struct cxlmi_cmd_get_feature_req *req)
@@ -323,11 +365,12 @@ int cmd_get_feature(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return rc;
 
 	if (!params.has_count) {
-		params.req.count = mailbox_lookup_feature_size(ep,
+		params.req.count = resolve_get_feature_count(ep,
 					params.req.feature_id);
 		if (params.req.count == 0) {
 			fprintf(stderr,
-				"get-feature: feature ID not found in supported features list\n");
+				"get-feature: cannot determine feature data size "
+				"(not in supported-features list; use --count <bytes>)\n");
 			return -1;
 		}
 	}

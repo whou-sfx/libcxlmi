@@ -2889,36 +2889,40 @@ static int sdb_tunnel_get_feature(struct cxlmi_endpoint *ep,
 		return rc;
 
 	if (!params.has_count) {
-		sf_req.count = MBCCI_FEATURE_DEFAULT_COUNT;
-		sf_req.starting_feature_index = 0;
+		params.req.count = lookup_feature_size_doc(params.req.feature_id);
+		if (!params.req.count) {
+			sf_req.count = MBCCI_FEATURE_DEFAULT_COUNT;
+			sf_req.starting_feature_index = 0;
 
-		sfrsp = calloc(1, MBCCI_FEATURE_RSP_BUF_SZ(sf_req.count));
-		if (!sfrsp) {
-			fprintf(stderr, "sdb-tunnel get-feature: out of memory\n");
-			return -1;
-		}
+			sfrsp = calloc(1, MBCCI_FEATURE_RSP_BUF_SZ(sf_req.count));
+			if (!sfrsp) {
+				fprintf(stderr, "sdb-tunnel get-feature: out of memory\n");
+				return -1;
+			}
 
-		rc = sdb_tunnel_fetch_supported_features(ep, port_id, &sf_req,
-							 sfrsp);
-		if (rc) {
-			if (rc > 0)
-				fprintf(stderr,
-					"sdb-tunnel get-feature: get-supported-feat failed: %s\n",
-					cxlmi_cmd_retcode_tostr(rc));
-			else
-				fprintf(stderr,
-					"sdb-tunnel get-feature: get-supported-feat ioctl failed\n");
+			rc = sdb_tunnel_fetch_supported_features(ep, port_id, &sf_req,
+								 sfrsp);
+			if (rc) {
+				if (rc > 0)
+					fprintf(stderr,
+						"sdb-tunnel get-feature: get-supported-feat failed: %s\n",
+						cxlmi_cmd_retcode_tostr(rc));
+				else
+					fprintf(stderr,
+						"sdb-tunnel get-feature: get-supported-feat ioctl failed\n");
+				free(sfrsp);
+				return rc;
+			}
+
+			params.req.count = lookup_feature_size(sfrsp,
+							       params.req.feature_id);
 			free(sfrsp);
-			return rc;
 		}
-
-		params.req.count = lookup_feature_size(sfrsp,
-						       params.req.feature_id);
-		free(sfrsp);
 
 		if (params.req.count == 0) {
 			fprintf(stderr,
-				"sdb-tunnel get-feature: feature ID not found in supported features list\n");
+				"sdb-tunnel get-feature: cannot determine feature data size "
+				"(not in supported-features list; use --count <bytes>)\n");
 			return -1;
 		}
 	}

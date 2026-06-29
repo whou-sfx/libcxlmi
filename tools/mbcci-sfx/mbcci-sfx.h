@@ -134,6 +134,9 @@ int parse_get_feature_req(int argc, char **argv,
 uint16_t lookup_feature_size(
 	const struct cxlmi_cmd_get_supported_features_rsp *sfrsp,
 	const uint8_t feature_id[16]);
+uint16_t lookup_feature_size_doc(const uint8_t feature_id[16]);
+uint16_t resolve_get_feature_count(struct cxlmi_endpoint *ep,
+				   const uint8_t feature_id[16]);
 void print_supported_features(
 	const struct cxlmi_cmd_get_supported_features_rsp *rsp);
 void print_feature_header(const struct cxlmi_cmd_get_feature_req *req);
