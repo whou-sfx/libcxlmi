@@ -104,11 +104,44 @@ int cmd_get_vendor_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 #define MBCCI_FEATURE_RSP_BUF_SZ(count) \
 	(sizeof(struct cxlmi_cmd_get_supported_features_rsp) + (count))
 
+enum mbcci_feature_kind {
+	MBCCI_FEAT_UNKNOWN = 0,
+	MBCCI_FEAT_SPPR,
+	MBCCI_FEAT_HPPR,
+	MBCCI_FEAT_PARTIAL_SCRUB,
+	MBCCI_FEAT_DDR5_ECS,
+	MBCCI_FEAT_CVME,
+	MBCCI_FEAT_ADDRESS_POLICY,
+	MBCCI_FEAT_RAS,
+	MBCCI_FEAT_CMC_REFRESH,
+	MBCCI_FEAT_DUAL_PORT,
+};
+
+enum mbcci_feature_kind mbcci_feature_kind(const uint8_t *uuid);
+
 int cmd_get_supported_feat(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_get_feature(struct cxlmi_endpoint *ep, int argc, char **argv);
 int parse_get_supported_features_req(int argc, char **argv,
 				     struct cxlmi_cmd_get_supported_features_req *req);
+
+struct get_feature_params {
+	struct cxlmi_cmd_get_feature_req req;
+	int has_count;
+};
+
+int parse_get_feature_req(int argc, char **argv,
+			  struct get_feature_params *params);
+uint16_t lookup_feature_size(
+	const struct cxlmi_cmd_get_supported_features_rsp *sfrsp,
+	const uint8_t feature_id[16]);
 void print_supported_features(
 	const struct cxlmi_cmd_get_supported_features_rsp *rsp);
+void print_feature_header(const struct cxlmi_cmd_get_feature_req *req);
+void print_feature_payload(uint16_t offset, uint16_t count,
+			   const uint8_t *buf);
+
+void print_feature_data(const uint8_t feature_id[16], uint16_t offset,
+			uint16_t count, const uint8_t *buf);
 
 struct get_log_params {
 	uint8_t uuid[16];

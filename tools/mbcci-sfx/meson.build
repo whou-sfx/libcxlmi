@@ -16,6 +16,7 @@ executable(
         'cmd_vu_evtadd.c',
         'cmd_logs.c',
         'cmd_features.c',
+        'cmd_feature_decode.c',
         'cmd_cel.c',
         'cmd_timestamp.c',
         'cmd_sdb_tunnel.c',

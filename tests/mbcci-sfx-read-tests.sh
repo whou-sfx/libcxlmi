@@ -78,9 +78,25 @@ run_test() {
 	local label="$1"
 	shift
 	local rc=0
+	local logfile
 
 	echo "==> [$label] $*"
-	if "$@"; then
+	if [ -n "${VERIFICATION_LOG_DIR:-}" ]; then
+		mkdir -p "$VERIFICATION_LOG_DIR"
+		logfile="$VERIFICATION_LOG_DIR/${label//\//_}.log"
+		if "$@" >"$logfile" 2>&1; then
+			cat "$logfile"
+			echo "    PASS"
+			PASS_COUNT=$((PASS_COUNT + 1))
+		else
+			rc=$?
+			cat "$logfile" >&2
+			echo "    FAIL (exit $rc)" >&2
+			FAILED_LABELS+=("$label")
+			FAILED_EXITS+=("$rc")
+			FAIL_COUNT=$((FAIL_COUNT + 1))
+		fi
+	elif "$@"; then
 		echo "    PASS"
 		PASS_COUNT=$((PASS_COUNT + 1))
 	else
@@ -210,6 +226,8 @@ run_sdb_phase() {
 		"$MBCCI" "$MEMDEV" sdb-tunnel fm-get-ld-alloc --port "$port"
 	run_test "sdb/$port/get-resp-msg-limit" \
 		"$MBCCI" "$MEMDEV" sdb-tunnel get-resp-msg-limit --port "$port"
+	run_test "sdb/$port/bg-op-status" \
+		"$MBCCI" "$MEMDEV" sdb-tunnel bg-op-status --port "$port"
 	run_test "sdb/$port/get-mctp-evt-int-policy" \
 		"$MBCCI" "$MEMDEV" sdb-tunnel get-mctp-evt-int-policy --port "$port"
 	run_test "sdb/$port/get-supported-feat" \

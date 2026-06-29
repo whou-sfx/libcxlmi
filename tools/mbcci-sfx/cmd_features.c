@@ -4,6 +4,7 @@
  */
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 
 #include <libcxlmi.h>
@@ -20,6 +21,7 @@
 struct feature_uuid_name {
 	uint8_t     uuid[16];
 	const char *name;
+	enum mbcci_feature_kind kind;
 };
 
 /*
@@ -28,32 +30,43 @@ struct feature_uuid_name {
 static const struct feature_uuid_name known_features[] = {
 	{ { 0x89, 0x2b, 0xa4, 0x75, 0xfa, 0xd8, 0x47, 0x4e,
 	    0x9d, 0x3e, 0x69, 0x2c, 0x91, 0x75, 0x68, 0xbb },
-	  "sPPR" },
+	  "sPPR", MBCCI_FEAT_SPPR },
 	{ { 0x80, 0xea, 0x45, 0x21, 0x78, 0x6f, 0x41, 0x27,
 	    0xaf, 0xb1, 0xec, 0x74, 0x59, 0xfb, 0x0e, 0x24 },
-	  "hPPR" },
+	  "hPPR", MBCCI_FEAT_HPPR },
 	{ { 0x96, 0xda, 0xd7, 0xd6, 0xfd, 0xe8, 0x48, 0x2b,
 	    0xa7, 0x33, 0x75, 0x77, 0x4e, 0x06, 0xdb, 0x8a },
-	  "Device Patrol Scrub Control" },
+	  "Device Patrol Scrub Control", MBCCI_FEAT_PARTIAL_SCRUB },
 	{ { 0xe5, 0xb1, 0x3f, 0x22, 0x23, 0x28, 0x4a, 0x14,
 	    0xb8, 0xba, 0xb9, 0x69, 0x1e, 0x89, 0x33, 0x86 },
-	  "DDR5 ECS Control" },
+	  "DDR5 ECS Control", MBCCI_FEAT_DDR5_ECS },
 	{ { 0x14, 0x78, 0xad, 0x9d, 0xce, 0x00, 0x47, 0x33,
 	    0x9d, 0xb8, 0xf3, 0x92, 0xa4, 0xc2, 0xd0, 0xcc },
-	  "CVME Threshold" },
+	  "CVME Threshold", MBCCI_FEAT_CVME },
 	{ { 0xf1, 0x82, 0xcc, 0xf8, 0x72, 0xbd, 0x11, 0xee,
 	    0xb9, 0x62, 0x02, 0x42, 0xac, 0x12, 0x00, 0x02 },
-	  "Addressing Policy" },
+	  "Addressing Policy", MBCCI_FEAT_ADDRESS_POLICY },
 	{ { 0x51, 0x74, 0xe5, 0x99, 0x14, 0x30, 0x43, 0x3e,
 	    0xaf, 0x4b, 0x57, 0x72, 0xba, 0xe6, 0xcc, 0x91 },
-	  "RAS Features" },
+	  "RAS Features", MBCCI_FEAT_RAS },
 	{ { 0xb4, 0x48, 0x97, 0xaf, 0xbd, 0xdb, 0x4e, 0x9b,
 	    0x9d, 0x74, 0xdb, 0xab, 0x49, 0x06, 0x2f, 0x7b },
-	  "CMC Refresh" },
+	  "CMC Refresh", MBCCI_FEAT_CMC_REFRESH },
 	{ { 0xb0, 0x07, 0x26, 0xe4, 0xde, 0x86, 0x42, 0x05,
 	    0xb2, 0x7f, 0xb0, 0xbb, 0x68, 0x25, 0x66, 0x0d },
-	  "Dual Port" },
+	  "Dual Port", MBCCI_FEAT_DUAL_PORT },
 };
+
+enum mbcci_feature_kind mbcci_feature_kind(const uint8_t *uuid)
+{
+	size_t i;
+
+	for (i = 0; i < sizeof(known_features) / sizeof(known_features[0]); i++) {
+		if (memcmp(known_features[i].uuid, uuid, 16) == 0)
+			return known_features[i].kind;
+	}
+	return MBCCI_FEAT_UNKNOWN;
+}
 
 static const char *lookup_feature_name(const uint8_t *uuid)
 {
@@ -182,6 +195,163 @@ int cmd_get_supported_feat(struct cxlmi_endpoint *ep, int argc, char **argv)
 	}
 
 	print_supported_features(rsp);
+	free(rsp);
+	return 0;
+}
+
+int parse_get_feature_req(int argc, char **argv,
+			  struct get_feature_params *params)
+{
+	int i;
+
+	memset(params, 0, sizeof(*params));
+	params->req.selection = 0;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--feature-id") == 0 && i + 1 < argc) {
+			if (parse_log_uuid(argv[++i], params->req.feature_id) != 0) {
+				fprintf(stderr,
+					"get-feature: invalid --feature-id\n");
+				return -1;
+			}
+		} else if (strcmp(argv[i], "--offset") == 0 && i + 1 < argc) {
+			char *end;
+			unsigned long val = strtoul(argv[++i], &end, 0);
+
+			if (*end != '\0' || val > UINT16_MAX) {
+				fprintf(stderr,
+					"get-feature: invalid --offset '%s'\n",
+					argv[i]);
+				return -1;
+			}
+			params->req.offset = (uint16_t)val;
+		} else if (strcmp(argv[i], "--count") == 0 && i + 1 < argc) {
+			char *end;
+			unsigned long val = strtoul(argv[++i], &end, 0);
+
+			if (*end != '\0' || val == 0 || val > UINT16_MAX) {
+				fprintf(stderr,
+					"get-feature: invalid --count '%s'\n",
+					argv[i]);
+				return -1;
+			}
+			params->req.count = (uint16_t)val;
+			params->has_count = 1;
+		} else if (strcmp(argv[i], "--selection") == 0 && i + 1 < argc) {
+			char *end;
+			unsigned long val = strtoul(argv[++i], &end, 0);
+
+			if (*end != '\0' || val > UINT8_MAX) {
+				fprintf(stderr,
+					"get-feature: invalid --selection '%s'\n",
+					argv[i]);
+				return -1;
+			}
+			params->req.selection = (uint8_t)val;
+		} else {
+			fprintf(stderr,
+				"Usage: get-feature --feature-id <uuid>"
+				" [--offset <n>] [--count <n>] [--selection <n>]\n"
+				"  --feature-id  feature UUID (32-char hex or standard format)\n"
+				"  --offset      byte offset into feature data (default 0)\n"
+				"  --count       bytes to retrieve (default: get_feature_size)\n"
+				"  --selection   feature selection value (default 0)\n");
+			return -1;
+		}
+	}
+
+	if (!memcmp(params->req.feature_id, (uint8_t[16]){ 0 }, 16)) {
+		fprintf(stderr,
+			"Usage: get-feature --feature-id <uuid>"
+			" [--offset <n>] [--count <n>] [--selection <n>]\n");
+		return -1;
+	}
+
+	return 0;
+}
+
+uint16_t lookup_feature_size(
+	const struct cxlmi_cmd_get_supported_features_rsp *sfrsp,
+	const uint8_t feature_id[16])
+{
+	uint16_t i;
+
+	for (i = 0; i < sfrsp->num_supported_feature_entries; i++) {
+		if (memcmp(sfrsp->supported_feature_entries[i].feature_id,
+			   feature_id, 16) == 0)
+			return sfrsp->supported_feature_entries[i].get_feature_size;
+	}
+	return 0;
+}
+
+static uint16_t mailbox_lookup_feature_size(struct cxlmi_endpoint *ep,
+					    const uint8_t feature_id[16])
+{
+	struct cxlmi_cmd_get_supported_features_req sf_req = { 0 };
+	struct cxlmi_cmd_get_supported_features_rsp *sfrsp;
+	uint16_t size;
+
+	sf_req.count = FEATURE_DEFAULT_COUNT;
+	sf_req.starting_feature_index = 0;
+
+	sfrsp = fetch_supported_features(ep, &sf_req);
+	if (!sfrsp)
+		return 0;
+
+	size = lookup_feature_size(sfrsp, feature_id);
+	free(sfrsp);
+	return size;
+}
+
+void print_feature_header(const struct cxlmi_cmd_get_feature_req *req)
+{
+	printf("Feature ID: ");
+	print_log_uuid(req->feature_id);
+	printf("  (%s)\n", lookup_feature_name(req->feature_id));
+	printf("Offset: %u  Count: %u  Selection: %u\n",
+	       req->offset, req->count, req->selection);
+}
+
+int cmd_get_feature(struct cxlmi_endpoint *ep, int argc, char **argv)
+{
+	struct get_feature_params params;
+	struct cxlmi_cmd_get_feature_rsp *rsp;
+	int rc;
+
+	rc = parse_get_feature_req(argc - 1, argv + 1, &params);
+	if (rc)
+		return rc;
+
+	if (!params.has_count) {
+		params.req.count = mailbox_lookup_feature_size(ep,
+					params.req.feature_id);
+		if (params.req.count == 0) {
+			fprintf(stderr,
+				"get-feature: feature ID not found in supported features list\n");
+			return -1;
+		}
+	}
+
+	rsp = calloc(1, sizeof(*rsp));
+	if (!rsp) {
+		fprintf(stderr, "get-feature: out of memory\n");
+		return -1;
+	}
+
+	rc = cxlmi_cmd_get_feature(ep, NULL, &params.req, rsp);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "get-feature failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "get-feature ioctl failed\n");
+		free(rsp);
+		return rc;
+	}
+
+	print_feature_header(&params.req);
+	print_feature_data(params.req.feature_id, params.req.offset,
+			   params.req.count, rsp->feature_data);
 	free(rsp);
 	return 0;
 }

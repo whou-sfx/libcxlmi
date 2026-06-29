@@ -34,6 +34,8 @@
  *   get-supported-logs Get Supported Logs (opcode 0x0400)
  *   get-log           Get Log (opcode 0x0401)
  *   get-supported-feat Get Supported Features (opcode 0x0500)
+ *   get-feature       Get Feature (opcode 0x0501)
+ *   bg-op-status      Background Operation Status (opcode 0x0002)
  */
 #include <stdio.h>
 #include <stdint.h>
@@ -1387,6 +1389,86 @@ static int sdb_tunnel_bg_op_abort(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel bg-op-status (inner opcode 0x0002)                      */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_bg_op_status(struct cxlmi_endpoint *ep,
+				 int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr         hdr;
+		struct cxlmi_cci_msg              msg;
+		struct cxlmi_cmd_bg_op_status_rsp wire;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_bg_op_status_rsp out;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel bg-op-status [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x02; /* BACKGROUND_OPERATION_STATUS */
+	req.msg.command_set = 0x00; /* INFOSTAT */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel bg-op-status failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel bg-op-status ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel bg-op-status: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	out.status = rsp.wire.status;
+	out.opcode = le16_to_cpu(rsp.wire.opcode);
+	out.returncode = le16_to_cpu(rsp.wire.returncode);
+	out.vendor_ext_status = le16_to_cpu(rsp.wire.vendor_ext_status);
+
+	printf("Status:             %u\n", out.status);
+	printf("Opcode:             0x%04x\n", out.opcode);
+	printf("Return Code:        0x%04x\n", out.returncode);
+	printf("Vendor Ext Status:  0x%04x\n", out.vendor_ext_status);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* sdb-tunnel get-resp-msg-limit (inner opcode 0x0003)                */
 /* ------------------------------------------------------------------ */
 
@@ -2708,6 +2790,165 @@ static int sdb_tunnel_get_supported_feat(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel get-feature (inner opcode 0x0501)                     */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_fetch_feature(struct cxlmi_endpoint *ep, uint8_t port_id,
+				    const struct cxlmi_cmd_get_feature_req *in,
+				    uint8_t *out, uint16_t count)
+{
+	struct {
+		struct sdb_tunnel_req_hdr           hdr;
+		struct cxlmi_cci_msg                msg;
+		struct cxlmi_cmd_get_feature_req    payload;
+	} __attribute__((packed)) req;
+
+	uint8_t *rsp_buf;
+	struct cxlmi_cci_msg *inner_rsp;
+	size_t rsp_buf_sz;
+	int rc;
+
+	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		     sizeof(struct cxlmi_cci_msg) +
+		     count;
+	rsp_buf = calloc(1, rsp_buf_sz);
+	if (!rsp_buf)
+		return -1;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+
+	req.msg.command     = 0x01; /* GET_FEATURE */
+	req.msg.command_set = 0x05; /* FEATURES    */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] = (uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+	req.msg.pl_length[2] = (uint8_t)((sizeof(req.payload) >> 16) & 0xff);
+
+	memcpy(req.payload.feature_id, in->feature_id, sizeof(in->feature_id));
+	req.payload.offset = cpu_to_le16(in->offset);
+	req.payload.count = cpu_to_le16(in->count);
+	req.payload.selection = in->selection;
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       rsp_buf, rsp_buf_sz);
+	if (rc) {
+		free(rsp_buf);
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", rsp_buf, rsp_buf_sz);
+
+	inner_rsp = (struct cxlmi_cci_msg *)(rsp_buf +
+					    sizeof(struct sdb_tunnel_rsp_hdr));
+	if (inner_rsp->return_code != 0) {
+		rc = (int)inner_rsp->return_code;
+		free(rsp_buf);
+		return rc;
+	}
+
+	memcpy(out, inner_rsp->payload, count);
+	free(rsp_buf);
+	return 0;
+}
+
+static int sdb_tunnel_get_feature(struct cxlmi_endpoint *ep,
+				    int argc, char **argv)
+{
+	struct cxlmi_cmd_get_supported_features_req sf_req = { 0 };
+	struct cxlmi_cmd_get_supported_features_rsp *sfrsp;
+	struct get_feature_params params;
+	char *feat_argv[16];
+	int feat_argc = 0;
+	uint8_t *data = NULL;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (feat_argc >= (int)(sizeof(feat_argv) / sizeof(feat_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel get-feature: too many arguments\n");
+				return -1;
+			}
+			feat_argv[feat_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_get_feature_req(feat_argc, feat_argv, &params);
+	if (rc)
+		return rc;
+
+	if (!params.has_count) {
+		sf_req.count = MBCCI_FEATURE_DEFAULT_COUNT;
+		sf_req.starting_feature_index = 0;
+
+		sfrsp = calloc(1, MBCCI_FEATURE_RSP_BUF_SZ(sf_req.count));
+		if (!sfrsp) {
+			fprintf(stderr, "sdb-tunnel get-feature: out of memory\n");
+			return -1;
+		}
+
+		rc = sdb_tunnel_fetch_supported_features(ep, port_id, &sf_req,
+							 sfrsp);
+		if (rc) {
+			if (rc > 0)
+				fprintf(stderr,
+					"sdb-tunnel get-feature: get-supported-feat failed: %s\n",
+					cxlmi_cmd_retcode_tostr(rc));
+			else
+				fprintf(stderr,
+					"sdb-tunnel get-feature: get-supported-feat ioctl failed\n");
+			free(sfrsp);
+			return rc;
+		}
+
+		params.req.count = lookup_feature_size(sfrsp,
+						       params.req.feature_id);
+		free(sfrsp);
+
+		if (params.req.count == 0) {
+			fprintf(stderr,
+				"sdb-tunnel get-feature: feature ID not found in supported features list\n");
+			return -1;
+		}
+	}
+
+	data = calloc(1, params.req.count);
+	if (!data) {
+		fprintf(stderr, "sdb-tunnel get-feature: out of memory\n");
+		return -1;
+	}
+
+	rc = sdb_tunnel_fetch_feature(ep, port_id, &params.req, data,
+				      params.req.count);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel get-feature failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel get-feature ioctl failed\n");
+		free(data);
+		return rc;
+	}
+
+	print_feature_header(&params.req);
+	print_feature_data(params.req.feature_id, params.req.offset,
+			   params.req.count, data);
+	free(data);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* sdb-tunnel get-log (inner opcode 0x0401)                           */
 /* ------------------------------------------------------------------ */
 
@@ -2873,8 +3114,11 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  get-supported-logs [--port <vdm0|vdm1|i3c>]                        Get Supported Logs (0x0400)\n"
 			"  get-supported-feat [--port <vdm0|vdm1|i3c>] [--count <bytes>] [--start-index <n>]\n"
 			"                                                                         Get Supported Features (0x0500)\n"
+			"  get-feature        [--port <vdm0|vdm1|i3c>] --feature-id <uuid> [--offset <n>] [--count <n>] [--selection <n>]\n"
+			"                                                                         Get Feature (0x0501)\n"
 			"  get-log            [--port <vdm0|vdm1|i3c>] --uuid <uuid> [--offset <n>] [--length <n>] [--text]\n"
 			"                                                                         Get Log (0x0401)\n"
+			"  bg-op-status       [--port <vdm0|vdm1|i3c>]                        Background Operation Status (0x0002)\n"
 			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
 			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
 			"  bg-op-abort          [--port <vmd0|vmd1|i3c>]                                          Request Abort Background Operation (0x0005)\n"
@@ -2921,8 +3165,12 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_get_supported_logs(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-supported-feat") == 0)
 		return sdb_tunnel_get_supported_feat(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-feature") == 0)
+		return sdb_tunnel_get_feature(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-log") == 0)
 		return sdb_tunnel_get_log(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "bg-op-status") == 0)
+		return sdb_tunnel_bg_op_status(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "bg-op-abort") == 0)
 		return sdb_tunnel_bg_op_abort(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-resp-msg-limit") == 0)
@@ -2944,7 +3192,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, get-supported-logs, get-supported-feat, get-log, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, get-supported-logs, get-supported-feat, get-feature, get-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");
