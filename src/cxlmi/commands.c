@@ -1960,6 +1960,7 @@ CXLMI_EXPORT int cxlmi_cmd_memdev_set_sld_qos_control(struct cxlmi_endpoint *ep,
 {
 	struct cxlmi_cmd_memdev_set_sld_qos_control_req *req_pl;
 	_cleanup_free_ struct cxlmi_cci_msg *req = NULL;
+	struct cxlmi_cci_msg rsp;
 	ssize_t req_sz;
 
 	CXLMI_BUILD_BUG_ON(sizeof(*in) != 4);
@@ -1978,7 +1979,7 @@ CXLMI_EXPORT int cxlmi_cmd_memdev_set_sld_qos_control(struct cxlmi_endpoint *ep,
 	req_pl->egress_severe_percentage = in->egress_severe_percentage;
 	req_pl->backpressure_sample_interval = in->backpressure_sample_interval;
 
-	return send_cmd_cci(ep, ti, req, req_sz, NULL, 0, 0);
+	return send_cmd_cci(ep, ti, req, req_sz, &rsp, sizeof(rsp), sizeof(rsp));
 }
 
 CXLMI_EXPORT int cxlmi_cmd_memdev_get_sld_qos_status(struct cxlmi_endpoint *ep,
