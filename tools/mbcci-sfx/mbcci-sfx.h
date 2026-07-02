@@ -127,16 +127,45 @@ int parse_get_supported_features_req(int argc, char **argv,
 struct get_feature_params {
 	struct cxlmi_cmd_get_feature_req req;
 	int has_count;
+	const char *dump_file;
 };
+
+struct set_feature_params {
+	uint8_t feature_id[16];
+	const char *input_file;
+	uint16_t offset;
+	uint32_t set_feature_flags;
+	uint8_t version;
+	int has_version;
+};
+
+int write_hex_payload_file(const char *path, const uint8_t *buf, size_t len);
+int read_hex_payload_file(const char *path, uint8_t *buf, size_t max_len,
+			  size_t *out_len);
 
 int parse_get_feature_req(int argc, char **argv,
 			  struct get_feature_params *params);
+int parse_set_feature_req(int argc, char **argv,
+			  struct set_feature_params *params);
 uint16_t lookup_feature_size(
 	const struct cxlmi_cmd_get_supported_features_rsp *sfrsp,
 	const uint8_t feature_id[16]);
+uint16_t lookup_set_feature_size(
+	const struct cxlmi_cmd_get_supported_features_rsp *sfrsp,
+	const uint8_t feature_id[16]);
+uint8_t lookup_set_feature_version(
+	const struct cxlmi_cmd_get_supported_features_rsp *sfrsp,
+	const uint8_t feature_id[16]);
 uint16_t lookup_feature_size_doc(const uint8_t feature_id[16]);
+uint16_t lookup_set_feature_size_doc(const uint8_t feature_id[16]);
+uint8_t lookup_set_feature_version_doc(const uint8_t feature_id[16]);
 uint16_t resolve_get_feature_count(struct cxlmi_endpoint *ep,
 				   const uint8_t feature_id[16]);
+uint16_t resolve_set_feature_count(struct cxlmi_endpoint *ep,
+				   const uint8_t feature_id[16]);
+uint8_t resolve_set_feature_version(struct cxlmi_endpoint *ep,
+				    const uint8_t feature_id[16]);
+int cmd_set_feature(struct cxlmi_endpoint *ep, int argc, char **argv);
 void print_supported_features(
 	const struct cxlmi_cmd_get_supported_features_rsp *rsp);
 void print_feature_header(const struct cxlmi_cmd_get_feature_req *req);

@@ -51,7 +51,9 @@ static const struct subcmd subcmds[] = {
 	{ "get-supported-feat",        cmd_get_supported_feat,
 	  "Get Supported Features (0500h) [--count <bytes>] [--start-index <n>]" },
 	{ "get-feature",               cmd_get_feature,
-	  "Get Feature (0501h) --feature-id <uuid> [--offset <n>] [--count <n>] [--selection <n>]" },
+	  "Get Feature (0501h) --feature-id <uuid> [--offset <n>] [--count <n>] [--selection <n>] [--dump <file>]" },
+	{ "set-feature",               cmd_set_feature,
+	  "Set Feature (0502h) --feature-id <uuid> --input <hexfile> [--offset <n>] [--flags <n>] [--version <n>]" },
 	{ "get-log",                   cmd_get_log,
 	  "Get Log (0401h) --uuid <hex32> [--offset <n>] [--length <n>]" },
 	{ "get-vendor-log",            cmd_get_vendor_log,
@@ -61,7 +63,7 @@ static const struct subcmd subcmds[] = {
 	{ "set-timestamp",             cmd_set_timestamp,
 	  "Set device timestamp (0301h) [--ts <ns>] (default: current host time)" },
 	{ "sdb-tunnel",                cmd_sdb_tunnel,
-	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|activate-fw|get-health-info|get-alert-config|set-alert-config|get-sld-qos-ctrl|set-sld-qos-ctrl|get-sld-qos-status|fm-get-ld-info|fm-get-ld-alloc|get-supported-logs|get-supported-feat|get-feature|get-log|bg-op-status|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
+	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|activate-fw|get-health-info|get-alert-config|set-alert-config|get-sld-qos-ctrl|set-sld-qos-ctrl|get-sld-qos-status|fm-get-ld-info|fm-get-ld-alloc|get-supported-logs|get-supported-feat|get-feature|set-feature|get-log|bg-op-status|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);

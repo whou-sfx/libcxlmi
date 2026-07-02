@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 
 #include <libcxlmi.h>
 
@@ -16,6 +17,26 @@
 static const uint8_t vendor_debug_log_uuid[16] = {
 	0x5e, 0x18, 0x19, 0xd9, 0x11, 0xa9, 0x40, 0x0c,
 	0x81, 0x1f, 0xd6, 0x07, 0x19, 0x40, 0x3d, 0x86
+};
+
+static const uint8_t ecs_log_uuid[16] = {
+	0xf1, 0x72, 0x0d, 0x60, 0xa7, 0xa9, 0x43, 0x06,
+	0xa0, 0x03, 0x11, 0x94, 0x8f, 0x9e, 0x07, 0x7c
+};
+
+static const uint8_t media_test_cap_log_uuid[16] = {
+	0xe6, 0xdf, 0xa3, 0x2c, 0xd1, 0x3e, 0x4a, 0x5c,
+	0x8c, 0xa8, 0x99, 0xbe, 0xbb, 0xf7, 0x31, 0xa4
+};
+
+static const uint8_t media_test_short_log_uuid[16] = {
+	0x2c, 0x25, 0x55, 0x22, 0x8c, 0xe4, 0x11, 0xec,
+	0xb9, 0x09, 0x02, 0x42, 0xac, 0x12, 0x00, 0x02
+};
+
+static const uint8_t media_test_long_log_uuid[16] = {
+	0xc1, 0xfe, 0x0b, 0x3e, 0x7a, 0x00, 0x44, 0x8e,
+	0xa2, 0x4e, 0xa6, 0xaa, 0xbb, 0xfe, 0x58, 0x7a
 };
 
 /* Known log UUIDs from CXL spec (Generic-Component-Commands.md). */
@@ -61,6 +82,167 @@ static const char *lookup_uuid_name(const uint8_t *uuid)
 			return known_uuids[i].name;
 	}
 	return "unknown";
+}
+
+static uint16_t read_le16(const uint8_t *p)
+{
+	return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static uint64_t read_le64(const uint8_t *p)
+{
+	return (uint64_t)p[0] |
+	       ((uint64_t)p[1] << 8) |
+	       ((uint64_t)p[2] << 16) |
+	       ((uint64_t)p[3] << 24) |
+	       ((uint64_t)p[4] << 32) |
+	       ((uint64_t)p[5] << 40) |
+	       ((uint64_t)p[6] << 48) |
+	       ((uint64_t)p[7] << 56);
+}
+
+static int ecs_uuid_match(const uint8_t uuid[16])
+{
+	return memcmp(uuid, ecs_log_uuid, 16) == 0;
+}
+
+static int media_test_cap_uuid_match(const uint8_t uuid[16])
+{
+	return memcmp(uuid, media_test_cap_log_uuid, 16) == 0;
+}
+
+static int media_test_short_uuid_match(const uint8_t uuid[16])
+{
+	return memcmp(uuid, media_test_short_log_uuid, 16) == 0;
+}
+
+static int media_test_long_uuid_match(const uint8_t uuid[16])
+{
+	return memcmp(uuid, media_test_long_log_uuid, 16) == 0;
+}
+
+static void print_ddr5_ecs_log(const uint8_t *buf, uint32_t length)
+{
+	const uint32_t header_sz = 4;
+	const uint32_t entry_sz = 34;
+	uint32_t entries, i;
+
+	if (length < header_sz) {
+		printf("DDR5 ECS log: payload too short (%u)\n", length);
+		return;
+	}
+
+	entries = (length - header_sz) / entry_sz;
+	printf("DDR5 ECS log decode:\n");
+	printf("  Header raw: 0x%02x%02x%02x%02x\n",
+	       buf[0], buf[1], buf[2], buf[3]);
+	printf("  Entries: %u\n", entries);
+
+	for (i = 0; i < entries; i++) {
+		const uint8_t *e = buf + header_sz + i * entry_sz;
+		uint64_t dram_addr = read_le64(e + 1) & 0x0000FFFFFFFFFFFFULL;
+		uint16_t err_cnt = read_le16(e + 7);
+		uint16_t threshold = read_le16(e + 9);
+
+		printf("  [%u] flags=0x%02x dram_addr=0x%012" PRIx64
+		       " ecs_error_count=%u ecs_threshold=%u\n",
+		       i, e[0], dram_addr, err_cnt, threshold);
+	}
+}
+
+static void print_media_test_capability_log(const uint8_t *buf, uint32_t length)
+{
+	const uint32_t header_sz = 16;
+	const uint32_t entry_sz = 16;
+	uint32_t entries, i;
+
+	if (length < header_sz) {
+		printf("Media Test Capability log: payload too short (%u)\n", length);
+		return;
+	}
+
+	entries = (length - header_sz) / entry_sz;
+	printf("Media Test Capability log decode:\n");
+	printf("  Header[0:15] raw, entries (from size): %u\n", entries);
+
+	for (i = 0; i < entries; i++) {
+		const uint8_t *e = buf + header_sz + i * entry_sz;
+		uint16_t expected_time_s_per_gb = read_le16(e + 2);
+
+		printf("  [%u] algo=0x%02x flags=0x%02x expected_time_s_per_gb=%u\n",
+		       i, e[0], e[1], expected_time_s_per_gb);
+	}
+}
+
+static void print_media_test_result_short_log(const uint8_t *buf, uint32_t length)
+{
+	const uint32_t header_sz = 16;
+	const uint32_t entry_sz = 32;
+	uint32_t entries, i;
+
+	if (length < header_sz) {
+		printf("Media Test Result Short log: payload too short (%u)\n", length);
+		return;
+	}
+
+	entries = (length - header_sz) / entry_sz;
+	printf("Media Test Result Short log decode:\n");
+	printf("  Header[0:15] raw, entries (from size): %u\n", entries);
+
+	for (i = 0; i < entries; i++) {
+		const uint8_t *e = buf + header_sz + i * entry_sz;
+		uint64_t start_time = read_le64(e + 0x08);
+		uint64_t end_time = read_le64(e + 0x10);
+
+		printf("  [%u] status=0x%02x flags=0x%02x start_time=%" PRIu64
+		       " end_time=%" PRIu64 "\n",
+		       i, e[0], e[1], start_time, end_time);
+	}
+}
+
+static void print_media_test_result_long_log(const uint8_t *buf, uint32_t length)
+{
+	const uint32_t header_sz = 16;
+	const uint32_t summary_sz = 48;
+	const uint32_t sig_sz = 80;
+	uint16_t task_status, error_count;
+	uint64_t start_time, end_time;
+	uint64_t range_start, range_len;
+	uint32_t remaining, sig_count, i;
+	const uint8_t *summary;
+
+	if (length < header_sz + summary_sz) {
+		printf("Media Test Result Long log: payload too short (%u)\n", length);
+		return;
+	}
+
+	summary = buf + header_sz;
+	task_status = read_le16(summary + 0x00);
+	error_count = read_le16(summary + 0x02);
+	start_time = read_le64(summary + 0x08);
+	end_time = read_le64(summary + 0x10);
+	range_start = read_le64(summary + 0x18);
+	range_len = read_le64(summary + 0x20);
+
+	remaining = length - (header_sz + summary_sz);
+	sig_count = remaining / sig_sz;
+
+	printf("Media Test Result Long log decode:\n");
+	printf("  task_status=0x%04x error_count=%u start_time=%" PRIu64
+	       " end_time=%" PRIu64 "\n",
+	       task_status, error_count, start_time, end_time);
+	printf("  test_range_start=0x%016" PRIx64 " test_range_len=0x%016" PRIx64
+	       " signatures=%u\n",
+	       range_start, range_len, sig_count);
+
+	for (i = 0; i < sig_count; i++) {
+		const uint8_t *s = buf + header_sz + summary_sz + i * sig_sz;
+		uint64_t failed_dpa = read_le64(s + 0x00);
+		uint16_t error_type = read_le16(s + 0x08);
+
+		printf("  [%u] failed_dpa=0x%016" PRIx64 " error_type=0x%04x\n",
+		       i, failed_dpa, error_type);
+	}
 }
 
 /* Print UUID in standard 8-4-4-4-12 format. */
@@ -243,6 +425,14 @@ void print_log_payload(const uint8_t uuid[16], uint32_t offset, uint32_t length,
 		fwrite(buf, 1, length, stdout);
 	} else if (cel_uuid_match(uuid)) {
 		print_cel_log(buf, length, offset);
+	} else if (offset == 0 && ecs_uuid_match(uuid)) {
+		print_ddr5_ecs_log(buf, length);
+	} else if (offset == 0 && media_test_cap_uuid_match(uuid)) {
+		print_media_test_capability_log(buf, length);
+	} else if (offset == 0 && media_test_short_uuid_match(uuid)) {
+		print_media_test_result_short_log(buf, length);
+	} else if (offset == 0 && media_test_long_uuid_match(uuid)) {
+		print_media_test_result_long_log(buf, length);
 	} else {
 		for (i = 0; i < length; i++) {
 			if (i % 16 == 0)
