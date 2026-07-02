@@ -503,6 +503,125 @@ int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv)
 	return 0;
 }
 
+int parse_log_uuid_req(int argc, char **argv, uint8_t uuid[16],
+		       const char *usage)
+{
+	int i, has_uuid = 0;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--uuid") == 0 && i + 1 < argc) {
+			if (parse_log_uuid(argv[++i], uuid) != 0)
+				return -1;
+			has_uuid = 1;
+		} else {
+			fprintf(stderr, "%s", usage);
+			return -1;
+		}
+	}
+
+	if (!has_uuid) {
+		fprintf(stderr, "%s", usage);
+		return -1;
+	}
+
+	return 0;
+}
+
+static void print_log_uuid_action(const char *action, const uint8_t uuid[16])
+{
+	printf("%s log ", action);
+	print_log_uuid(uuid);
+	printf("  (%s)\n", lookup_uuid_name(uuid));
+}
+
+int cmd_get_log_cap(struct cxlmi_endpoint *ep, int argc, char **argv)
+{
+	struct cxlmi_cmd_get_log_capabilities_req req = { 0 };
+	struct cxlmi_cmd_get_log_capabilities_rsp rsp = { 0 };
+	int rc;
+
+	rc = parse_log_uuid_req(argc - 1, argv + 1, req.uuid,
+				"Usage: get-log-cap --uuid <uuid>\n"
+				"  --uuid  log UUID (32-char hex or standard format)\n");
+	if (rc)
+		return rc;
+
+	rc = cxlmi_cmd_get_log_capabilities(ep, NULL, &req, &rsp);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "get-log-cap failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "get-log-cap ioctl failed\n");
+		return rc;
+	}
+
+	printf("Log capabilities for ");
+	print_log_uuid(req.uuid);
+	printf("  (%s)\n", lookup_uuid_name(req.uuid));
+	printf("  parameter_flags: 0x%08x\n", rsp.parameter_flags);
+	printf("  clear_log_supported: %s\n",
+	       (rsp.parameter_flags & 0x01) ? "yes" : "no");
+	printf("  populate_log_supported: %s\n",
+	       (rsp.parameter_flags & 0x02) ? "yes" : "no");
+	printf("  auto_populate_log_supported: %s\n",
+	       (rsp.parameter_flags & 0x04) ? "yes" : "no");
+	printf("  persistent_across_cold_reset: %s\n",
+	       (rsp.parameter_flags & 0x08) ? "yes" : "no");
+
+	return 0;
+}
+
+int cmd_clear_log(struct cxlmi_endpoint *ep, int argc, char **argv)
+{
+	struct cxlmi_cmd_clear_log_req req = { 0 };
+	int rc;
+
+	rc = parse_log_uuid_req(argc - 1, argv + 1, req.uuid,
+				"Usage: clear-log --uuid <uuid>\n"
+				"  --uuid  log UUID (32-char hex or standard format)\n");
+	if (rc)
+		return rc;
+
+	rc = cxlmi_cmd_clear_log(ep, NULL, &req);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "clear-log failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "clear-log ioctl failed\n");
+		return rc;
+	}
+
+	print_log_uuid_action("Cleared", req.uuid);
+	return 0;
+}
+
+int cmd_populate_log(struct cxlmi_endpoint *ep, int argc, char **argv)
+{
+	struct cxlmi_cmd_populate_log_req req = { 0 };
+	int rc;
+
+	rc = parse_log_uuid_req(argc - 1, argv + 1, req.uuid,
+				"Usage: populate-log --uuid <uuid>\n"
+				"  --uuid  log UUID (32-char hex or standard format)\n");
+	if (rc)
+		return rc;
+
+	rc = cxlmi_cmd_populate_log(ep, NULL, &req);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "populate-log failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "populate-log ioctl failed\n");
+		return rc;
+	}
+
+	print_log_uuid_action("Populated", req.uuid);
+	return 0;
+}
+
 int cmd_get_vendor_log(struct cxlmi_endpoint *ep, int argc, char **argv)
 {
 	struct cxlmi_cmd_get_supported_logs_rsp *srsp;

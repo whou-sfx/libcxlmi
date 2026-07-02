@@ -97,6 +97,9 @@ int cmd_vu_evtadd(struct cxlmi_endpoint *ep, int argc, char **argv);
 
 int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_get_log_cap(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_clear_log(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_populate_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_vendor_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 
 #define MBCCI_FEATURE_ENTRY_SZ 48
@@ -187,6 +190,8 @@ struct get_log_params {
 void print_log_uuid(const uint8_t *uuid);
 void print_supported_logs(const struct cxlmi_cmd_get_supported_logs_rsp *rsp);
 int parse_log_uuid(const char *str, uint8_t *out);
+int parse_log_uuid_req(int argc, char **argv, uint8_t uuid[16],
+		       const char *usage);
 int parse_get_log_req(int argc, char **argv, struct get_log_params *params);
 uint32_t lookup_log_size(const struct cxlmi_cmd_get_supported_logs_rsp *srsp,
 			 const uint8_t uuid[16]);

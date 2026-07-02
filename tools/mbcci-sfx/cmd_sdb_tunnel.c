@@ -33,6 +33,9 @@
  *   fm-get-ld-alloc   FM Get LD Allocations (opcode 0x5401)
  *   get-supported-logs Get Supported Logs (opcode 0x0400)
  *   get-log           Get Log (opcode 0x0401)
+ *   get-log-cap       Get Log Capabilities (opcode 0x0402)
+ *   clear-log         Clear Log (opcode 0x0403)
+ *   populate-log      Populate Log (opcode 0x0404)
  *   get-supported-feat Get Supported Features (opcode 0x0500)
  *   get-feature       Get Feature (opcode 0x0501)
  *   set-feature       Set Feature (opcode 0x0502)
@@ -3307,6 +3310,208 @@ static int sdb_tunnel_get_log(struct cxlmi_endpoint *ep, int argc, char **argv)
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel get-log-cap (inner opcode 0x0402)                       */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_get_log_cap(struct cxlmi_endpoint *ep, int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+		uint8_t                   uuid[16];
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+		uint32_t                  parameter_flags;
+	} __attribute__((packed)) rsp;
+
+	uint8_t uuid[16];
+	char *log_argv[16];
+	int log_argc = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+	uint32_t flags;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (log_argc >= (int)(sizeof(log_argv) / sizeof(log_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel get-log-cap: too many arguments\n");
+				return -1;
+			}
+			log_argv[log_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_log_uuid_req(log_argc, log_argv, uuid,
+				"Usage: sdb-tunnel get-log-cap [--port <vdm0|vdm1|i3c>] --uuid <uuid>\n"
+				"  --uuid  log UUID (32-char hex or standard format)\n");
+	if (rc)
+		return rc;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.uuid));
+	req.msg.command      = 0x02; /* GET_LOG_CAPS */
+	req.msg.command_set  = 0x04; /* LOGS */
+	req.msg.pl_length[0] = sizeof(req.uuid);
+	memcpy(req.uuid, uuid, sizeof(req.uuid));
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel get-log-cap failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel get-log-cap ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel get-log-cap: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	flags = le32_to_cpu(rsp.parameter_flags);
+	printf("Log capabilities for ");
+	print_log_uuid(uuid);
+	printf(" (port %u)\n", port_id);
+	printf("  parameter_flags: 0x%08x\n", flags);
+	printf("  clear_log_supported: %s\n", (flags & 0x01) ? "yes" : "no");
+	printf("  populate_log_supported: %s\n", (flags & 0x02) ? "yes" : "no");
+	printf("  auto_populate_log_supported: %s\n",
+	       (flags & 0x04) ? "yes" : "no");
+	printf("  persistent_across_cold_reset: %s\n",
+	       (flags & 0x08) ? "yes" : "no");
+
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel clear-log / populate-log (inner opcode 0x0403 / 0x0404) */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_log_uuid_cmd(struct cxlmi_endpoint *ep, int argc,
+				   char **argv, uint8_t inner_cmd,
+				   const char *cmd_name, const char *usage,
+				   const char *action)
+{
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+		uint8_t                   uuid[16];
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	uint8_t uuid[16];
+	char *log_argv[16];
+	int log_argc = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (log_argc >= (int)(sizeof(log_argv) / sizeof(log_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel %s: too many arguments\n",
+					cmd_name);
+				return -1;
+			}
+			log_argv[log_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_log_uuid_req(log_argc, log_argv, uuid, usage);
+	if (rc)
+		return rc;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.uuid));
+
+	req.msg.command     = inner_cmd;
+	req.msg.command_set = 0x04; /* LOGS */
+	req.msg.pl_length[0] = sizeof(req.uuid);
+	memcpy(req.uuid, uuid, sizeof(req.uuid));
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel %s failed: %s\n",
+				cmd_name, cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel %s ioctl failed\n",
+				cmd_name);
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel %s: inner CCI error 0x%04x\n",
+			cmd_name, rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("%s log ", action);
+	print_log_uuid(uuid);
+	printf(" (port %u)\n", port_id);
+	return 0;
+}
+
+static int sdb_tunnel_clear_log(struct cxlmi_endpoint *ep, int argc, char **argv)
+{
+	return sdb_tunnel_log_uuid_cmd(ep, argc, argv, 0x03, "clear-log",
+		"Usage: sdb-tunnel clear-log [--port <vdm0|vdm1|i3c>] --uuid <uuid>\n"
+		"  --uuid  log UUID (32-char hex or standard format)\n",
+		"Cleared");
+}
+
+static int sdb_tunnel_populate_log(struct cxlmi_endpoint *ep,
+				   int argc, char **argv)
+{
+	return sdb_tunnel_log_uuid_cmd(ep, argc, argv, 0x04, "populate-log",
+		"Usage: sdb-tunnel populate-log [--port <vdm0|vdm1|i3c>] --uuid <uuid>\n"
+		"  --uuid  log UUID (32-char hex or standard format)\n",
+		"Populated");
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -3345,6 +3550,9 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"                                                                         Set Feature (0x0502)\n"
 			"  get-log            [--port <vdm0|vdm1|i3c>] --uuid <uuid> [--offset <n>] [--length <n>] [--text]\n"
 			"                                                                         Get Log (0x0401)\n"
+			"  get-log-cap        [--port <vdm0|vdm1|i3c>] --uuid <uuid>                       Get Log Capabilities (0x0402)\n"
+			"  clear-log          [--port <vdm0|vdm1|i3c>] --uuid <uuid>                       Clear Log (0x0403)\n"
+			"  populate-log       [--port <vdm0|vdm1|i3c>] --uuid <uuid>                       Populate Log (0x0404)\n"
 			"  bg-op-status       [--port <vdm0|vdm1|i3c>]                        Background Operation Status (0x0002)\n"
 			"  get-resp-msg-limit [--port <vdm0|vdm1|i3c>]                        Get Response Message Limit (0x0003)\n"
 			"  set-resp-msg-limit [--port <vdm0|vdm1|i3c>] --limit <n>            Set Response Message Limit (0x0004)\n"
@@ -3398,6 +3606,12 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_set_feature(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-log") == 0)
 		return sdb_tunnel_get_log(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-log-cap") == 0)
+		return sdb_tunnel_get_log_cap(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "clear-log") == 0)
+		return sdb_tunnel_clear_log(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "populate-log") == 0)
+		return sdb_tunnel_populate_log(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "bg-op-status") == 0)
 		return sdb_tunnel_bg_op_status(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "bg-op-abort") == 0)
@@ -3421,7 +3635,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, get-supported-logs, get-supported-feat, get-feature, set-feature, get-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, get-supported-logs, get-supported-feat, get-feature, set-feature, get-log, get-log-cap, clear-log, populate-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");

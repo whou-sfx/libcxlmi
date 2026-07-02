@@ -56,6 +56,12 @@ static const struct subcmd subcmds[] = {
 	  "Set Feature (0502h) --feature-id <uuid> --input <hexfile> [--offset <n>] [--flags <n>] [--version <n>]" },
 	{ "get-log",                   cmd_get_log,
 	  "Get Log (0401h) --uuid <hex32> [--offset <n>] [--length <n>]" },
+	{ "get-log-cap",               cmd_get_log_cap,
+	  "Get Log Capabilities (0402h) --uuid <hex32>" },
+	{ "clear-log",                 cmd_clear_log,
+	  "Clear Log (0403h) --uuid <hex32>" },
+	{ "populate-log",              cmd_populate_log,
+	  "Populate Log (0404h) --uuid <hex32>" },
 	{ "get-vendor-log",            cmd_get_vendor_log,
 	  "Fetch full Vendor Debug Log in 2K chunks -f <output_file>" },
 	{ "get-timestamp",             cmd_get_timestamp,
@@ -63,7 +69,7 @@ static const struct subcmd subcmds[] = {
 	{ "set-timestamp",             cmd_set_timestamp,
 	  "Set device timestamp (0301h) [--ts <ns>] (default: current host time)" },
 	{ "sdb-tunnel",                cmd_sdb_tunnel,
-	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|activate-fw|get-health-info|get-alert-config|set-alert-config|get-sld-qos-ctrl|set-sld-qos-ctrl|get-sld-qos-status|fm-get-ld-info|fm-get-ld-alloc|get-supported-logs|get-supported-feat|get-feature|set-feature|get-log|bg-op-status|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
+	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|activate-fw|get-health-info|get-alert-config|set-alert-config|get-sld-qos-ctrl|set-sld-qos-ctrl|get-sld-qos-status|fm-get-ld-info|fm-get-ld-alloc|get-supported-logs|get-supported-feat|get-feature|set-feature|get-log|get-log-cap|clear-log|populate-log|bg-op-status|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);
