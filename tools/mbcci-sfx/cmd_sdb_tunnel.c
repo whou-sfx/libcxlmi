@@ -2038,6 +2038,7 @@ static int sdb_tunnel_set_mctp_evt_int_policy(struct cxlmi_endpoint *ep,
 	struct {
 		struct sdb_tunnel_rsp_hdr hdr;
 		struct cxlmi_cci_msg      msg;
+		struct cxlmi_cmd_get_mctp_event_interrupt_policy_rsp rsp;
 	} __attribute__((packed)) rsp;
 
 	uint8_t port_id = 0;
@@ -2084,7 +2085,7 @@ static int sdb_tunnel_set_mctp_evt_int_policy(struct cxlmi_endpoint *ep,
 	req.msg.pl_length[0] = sizeof(req.payload) & 0xff;
 	req.msg.pl_length[1] = (sizeof(req.payload) >> 8) & 0xff;
 
-	req.payload.event_interrupt_settings = (uint16_t)settings_val;
+	req.payload.event_interrupt_settings = cpu_to_le16((uint16_t)settings_val);
 
 	memset(&rsp, 0, sizeof(rsp));
 
@@ -2113,7 +2114,17 @@ static int sdb_tunnel_set_mctp_evt_int_policy(struct cxlmi_endpoint *ep,
 		return (int)rsp.msg.return_code;
 	}
 
-	printf("MCTP Event Interrupt Settings set: 0x%04lx\n", settings_val);
+	{
+		uint16_t s = le16_to_cpu(rsp.rsp.event_interrupt_settings);
+
+		printf("MCTP Event Interrupt Settings set: 0x%04x\n", s);
+		printf("  [0] Informational Event Log:       %s\n", (s >> 0) & 1 ? "enabled" : "disabled");
+		printf("  [1] Warning Event Log:             %s\n", (s >> 1) & 1 ? "enabled" : "disabled");
+		printf("  [2] Failure Event Log:             %s\n", (s >> 2) & 1 ? "enabled" : "disabled");
+		printf("  [3] Fatal Event Log:               %s\n", (s >> 3) & 1 ? "enabled" : "disabled");
+		printf("  [4] Dynamic Capacity Event Log:    %s\n", (s >> 4) & 1 ? "enabled" : "disabled");
+		printf("  [15] Background Operation Done:    %s\n", (s >> 15) & 1 ? "enabled" : "disabled");
+	}
 	return 0;
 }
 
