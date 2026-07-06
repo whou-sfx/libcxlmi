@@ -31,6 +31,7 @@
  *   get-sld-qos-status Get SLD QoS Status (opcode 0x4702)
  *   fm-get-ld-info    FM Get LD Info (opcode 0x5400)
  *   fm-get-ld-alloc   FM Get LD Allocations (opcode 0x5401)
+ *   fm-set-ld-alloc   FM Set LD Allocations (opcode 0x5402)
  *   get-supported-logs Get Supported Logs (opcode 0x0400)
  *   get-log           Get Log (opcode 0x0401)
  *   get-log-cap       Get Log Capabilities (opcode 0x0402)
@@ -2410,15 +2411,17 @@ static int sdb_tunnel_fm_get_ld_alloc(struct cxlmi_endpoint *ep,
 		struct cxlmi_cmd_fmapi_get_ld_allocations_req     payload;
 	} __attribute__((packed)) req;
 
-	struct cxlmi_cmd_fmapi_get_ld_allocations_req in;
+	struct fm_get_ld_alloc_params params;
 	char *alloc_argv[16];
 	int alloc_argc = 0;
 	uint8_t *rsp_buf = NULL;
 	uint8_t *host_buf = NULL;
+	uint8_t dump_buf[MBCCI_FM_GET_LD_ALLOC_HDR_SZ +
+			 255 * sizeof(struct cxlmi_cmd_fmapi_ld_allocations_list)];
 	struct cxlmi_cci_msg *inner_rsp;
 	struct cxlmi_cmd_fmapi_get_ld_allocations_rsp *wire_rsp;
 	struct cxlmi_cmd_fmapi_get_ld_allocations_rsp *host_rsp;
-	size_t list_bytes, rsp_buf_sz;
+	size_t list_bytes, rsp_buf_sz, dump_len = 0;
 	uint8_t port_id = 0;
 	int rc, i;
 
@@ -2438,11 +2441,11 @@ static int sdb_tunnel_fm_get_ld_alloc(struct cxlmi_endpoint *ep,
 		}
 	}
 
-	rc = parse_fm_get_ld_alloc_req(alloc_argc, alloc_argv, &in);
+	rc = parse_fm_get_ld_alloc_req(alloc_argc, alloc_argv, &params);
 	if (rc)
 		return rc;
 
-	list_bytes = in.ld_allocation_list_limit *
+	list_bytes = params.req.ld_allocation_list_limit *
 		     sizeof(struct cxlmi_cmd_fmapi_ld_allocations_list);
 	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
 		     sizeof(struct cxlmi_cci_msg) +
@@ -2469,8 +2472,9 @@ static int sdb_tunnel_fm_get_ld_alloc(struct cxlmi_endpoint *ep,
 	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
 	req.msg.pl_length[1] = (uint8_t)((sizeof(req.payload) >> 8) & 0xff);
 
-	req.payload.start_ld_id = in.start_ld_id;
-	req.payload.ld_allocation_list_limit = in.ld_allocation_list_limit;
+	req.payload.start_ld_id = params.req.start_ld_id;
+	req.payload.ld_allocation_list_limit =
+		params.req.ld_allocation_list_limit;
 
 	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
 
@@ -2507,6 +2511,235 @@ static int sdb_tunnel_fm_get_ld_alloc(struct cxlmi_endpoint *ep,
 	sdb_parse_fm_get_ld_alloc_rsp(wire_rsp, host_rsp);
 	print_fm_get_ld_alloc(host_rsp);
 
+	if (params.raw_dump_file) {
+		size_t pl_len = inner_rsp->pl_length[0] |
+				((size_t)inner_rsp->pl_length[1] << 8) |
+				((size_t)(inner_rsp->pl_length[2] & 0x0f) << 16);
+
+		if (pl_len == 0) {
+			rc = fm_ld_alloc_build_get_rsp_payload(host_rsp, dump_buf,
+							       sizeof(dump_buf),
+							       &dump_len);
+			if (rc) {
+				fprintf(stderr,
+					"sdb-tunnel fm-get-ld-alloc: nothing to dump (empty allocation list)\n");
+				free(rsp_buf);
+				free(host_buf);
+				return -1;
+			}
+		} else {
+			if (pl_len > sizeof(dump_buf)) {
+				fprintf(stderr,
+					"sdb-tunnel fm-get-ld-alloc: response payload too large (%zu bytes)\n",
+					pl_len);
+				free(rsp_buf);
+				free(host_buf);
+				return -1;
+			}
+			memcpy(dump_buf, wire_rsp, pl_len);
+			dump_len = pl_len;
+		}
+
+		rc = write_hex_payload_file(params.raw_dump_file, dump_buf, dump_len);
+		if (rc) {
+			fprintf(stderr,
+				"sdb-tunnel fm-get-ld-alloc: failed to write '%s': ",
+				params.raw_dump_file);
+			perror(NULL);
+			free(rsp_buf);
+			free(host_buf);
+			return -1;
+		}
+		printf("Raw dump written to %s (%zu bytes, get-ld-alloc response payload)\n",
+		       params.raw_dump_file, dump_len);
+	}
+
+	free(rsp_buf);
+	free(host_buf);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel fm-set-ld-alloc (inner opcode 0x5402)                 */
+/* ------------------------------------------------------------------ */
+
+static void sdb_parse_fm_set_ld_alloc_rsp(
+	const struct cxlmi_cmd_fmapi_set_ld_allocations_rsp *wire,
+	struct cxlmi_cmd_fmapi_set_ld_allocations_rsp *host,
+	uint8_t number_ld)
+{
+	unsigned int i;
+
+	host->number_ld = wire->number_ld;
+	host->start_ld_id = wire->start_ld_id;
+
+	for (i = 0; i < number_ld; i++) {
+		host->ld_allocation_list[i].range_1_allocation_mult =
+			le64_to_cpu(wire->ld_allocation_list[i].range_1_allocation_mult);
+		host->ld_allocation_list[i].range_2_allocation_mult =
+			le64_to_cpu(wire->ld_allocation_list[i].range_2_allocation_mult);
+	}
+}
+
+static int sdb_tunnel_fm_set_ld_alloc(struct cxlmi_endpoint *ep,
+				      int argc, char **argv)
+{
+	struct fm_set_ld_alloc_params params;
+	char *set_argv[16];
+	int set_argc = 0;
+	uint8_t *req_buf = NULL;
+	uint8_t *rsp_buf = NULL;
+	uint8_t *host_buf = NULL;
+	uint8_t payload[MBCCI_FM_SET_LD_ALLOC_HDR_SZ +
+			255 * sizeof(struct cxlmi_cmd_fmapi_ld_allocations_list)];
+	struct sdb_tunnel_req_hdr *req_hdr;
+	struct cxlmi_cci_msg *req_msg;
+	struct cxlmi_cci_msg *inner_rsp;
+	struct cxlmi_cmd_fmapi_set_ld_allocations_rsp *wire_rsp;
+	struct cxlmi_cmd_fmapi_set_ld_allocations_rsp *host_rsp;
+	size_t payload_len, req_buf_sz, rsp_buf_sz, list_bytes;
+	uint8_t port_id = 0, number_ld;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (set_argc >= (int)(sizeof(set_argv) / sizeof(set_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel fm-set-ld-alloc: too many arguments\n");
+				return -1;
+			}
+			set_argv[set_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_fm_set_ld_alloc_req(set_argc, set_argv, &params);
+	if (rc)
+		return rc;
+
+	rc = read_hex_payload_file(params.input_file, payload,
+				   sizeof(payload), &payload_len);
+	if (rc == -1) {
+		fprintf(stderr, "sdb-tunnel fm-set-ld-alloc: cannot open '%s': ",
+			params.input_file);
+		perror(NULL);
+		return -1;
+	}
+	if (rc == -2) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-ld-alloc: invalid hex in '%s'\n",
+			params.input_file);
+		return -1;
+	}
+	if (rc == -3) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-ld-alloc: payload in '%s' exceeds maximum size\n",
+			params.input_file);
+		return -1;
+	}
+
+	if (payload_len < MBCCI_FM_GET_LD_ALLOC_HDR_SZ ||
+	    (payload_len - MBCCI_FM_GET_LD_ALLOC_HDR_SZ) %
+	    sizeof(struct cxlmi_cmd_fmapi_ld_allocations_list)) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-ld-alloc: payload size %zu is not "
+			"4 + N*16 bytes\n", payload_len);
+		return -1;
+	}
+
+	rc = fm_ld_alloc_normalize_set_payload(payload, payload_len, &params,
+					       &number_ld);
+	if (rc) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-ld-alloc: payload in '%s' is neither "
+			"get-ld-alloc response nor set-ld-alloc request format\n",
+			params.input_file);
+		return -1;
+	}
+
+	if (fm_set_ld_alloc_payload_size(number_ld) != payload_len) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-ld-alloc: number_ld %u does not match "
+			"payload size %zu\n", number_ld, payload_len);
+		return -1;
+	}
+
+	req_buf_sz = sizeof(struct sdb_tunnel_req_hdr) +
+		     sizeof(struct cxlmi_cci_msg) + payload_len;
+	list_bytes = number_ld * sizeof(struct cxlmi_cmd_fmapi_ld_allocations_list);
+	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		     sizeof(struct cxlmi_cci_msg) +
+		     sizeof(struct cxlmi_cmd_fmapi_set_ld_allocations_rsp) +
+		     list_bytes;
+
+	req_buf = calloc(1, req_buf_sz);
+	rsp_buf = calloc(1, rsp_buf_sz);
+	host_buf = calloc(1, sizeof(struct cxlmi_cmd_fmapi_set_ld_allocations_rsp) +
+			       list_bytes);
+	if (!req_buf || !rsp_buf || !host_buf) {
+		fprintf(stderr, "sdb-tunnel fm-set-ld-alloc: out of memory\n");
+		free(req_buf);
+		free(rsp_buf);
+		free(host_buf);
+		return -1;
+	}
+
+	req_hdr = (struct sdb_tunnel_req_hdr *)req_buf;
+	req_msg = (struct cxlmi_cci_msg *)(req_buf + sizeof(*req_hdr));
+
+	req_hdr->id           = port_id;
+	req_hdr->target_type  = 0;
+	req_hdr->command_size = (uint16_t)(sizeof(*req_msg) + payload_len);
+
+	req_msg->command     = 0x02; /* SET_LD_ALLOCATIONS */
+	req_msg->command_set = 0x54; /* MLD_COMPONENTS     */
+	req_msg->pl_length[0] = (uint8_t)(payload_len & 0xff);
+	req_msg->pl_length[1] = (uint8_t)((payload_len >> 8) & 0xff);
+	req_msg->pl_length[2] = (uint8_t)((payload_len >> 16) & 0xff);
+	memcpy(req_msg->payload, payload, payload_len);
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", req_buf, req_buf_sz);
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       req_buf, req_buf_sz,
+				       rsp_buf, rsp_buf_sz);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-set-ld-alloc failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-set-ld-alloc ioctl failed\n");
+		free(req_buf);
+		free(rsp_buf);
+		free(host_buf);
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", rsp_buf, rsp_buf_sz);
+
+	inner_rsp = (struct cxlmi_cci_msg *)(rsp_buf + sizeof(struct sdb_tunnel_rsp_hdr));
+	if (inner_rsp->return_code != 0) {
+		uint16_t err = inner_rsp->return_code;
+
+		fprintf(stderr,
+			"sdb-tunnel fm-set-ld-alloc: inner CCI error 0x%04x\n",
+			err);
+		free(req_buf);
+		free(rsp_buf);
+		free(host_buf);
+		return (int)err;
+	}
+
+	wire_rsp = (struct cxlmi_cmd_fmapi_set_ld_allocations_rsp *)inner_rsp->payload;
+	host_rsp = (struct cxlmi_cmd_fmapi_set_ld_allocations_rsp *)host_buf;
+	sdb_parse_fm_set_ld_alloc_rsp(wire_rsp, host_rsp, number_ld);
+	print_fm_set_ld_alloc(host_rsp);
+
+	free(req_buf);
 	free(rsp_buf);
 	free(host_buf);
 	return 0;
@@ -3550,8 +3783,10 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"                                                                         Set SLD QoS Control (0x4701)\n"
 			"  get-sld-qos-status [--port <vdm0|vdm1|i3c>]                        Get SLD QoS Status (0x4702)\n"
 			"  fm-get-ld-info     [--port <vdm0|vdm1|i3c>]                        FM Get LD Info (0x5400)\n"
-			"  fm-get-ld-alloc    [--port <vdm0|vdm1|i3c>] [--start-ld-id <n>] [--limit <n>]\n"
+			"  fm-get-ld-alloc    [--port <vdm0|vdm1|i3c>] [--start-ld-id <n>] [--limit <n>] [--raw-dump <file>]\n"
 			"                                                                         FM Get LD Allocations (0x5401)\n"
+			"  fm-set-ld-alloc    [--port <vdm0|vdm1|i3c>] --input <hexfile> [--number-ld <n>] [--start-ld-id <n>]\n"
+			"                                                                         FM Set LD Allocations (0x5402)\n"
 			"  get-supported-logs [--port <vdm0|vdm1|i3c>]                        Get Supported Logs (0x0400)\n"
 			"  get-supported-feat [--port <vdm0|vdm1|i3c>] [--count <bytes>] [--start-index <n>]\n"
 			"                                                                         Get Supported Features (0x0500)\n"
@@ -3607,6 +3842,8 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_fm_get_ld_info(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "fm-get-ld-alloc") == 0)
 		return sdb_tunnel_fm_get_ld_alloc(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-set-ld-alloc") == 0)
+		return sdb_tunnel_fm_set_ld_alloc(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-supported-logs") == 0)
 		return sdb_tunnel_get_supported_logs(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-supported-feat") == 0)
@@ -3646,7 +3883,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, get-supported-logs, get-supported-feat, get-feature, set-feature, get-log, get-log-cap, clear-log, populate-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, fm-set-ld-alloc, get-supported-logs, get-supported-feat, get-feature, set-feature, get-log, get-log-cap, clear-log, populate-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");

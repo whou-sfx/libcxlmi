@@ -210,9 +210,38 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv);
 void print_qos_telemetry_capability(uint8_t val);
 void print_fm_get_ld_info(const struct cxlmi_cmd_fmapi_get_ld_info_rsp *rsp);
 
+struct fm_get_ld_alloc_params {
+	struct cxlmi_cmd_fmapi_get_ld_allocations_req req;
+	const char *raw_dump_file;
+};
+
+struct fm_set_ld_alloc_params {
+	const char *input_file;
+	uint8_t number_ld;
+	uint8_t start_ld_id;
+	int has_number_ld;
+	int has_start_ld_id;
+};
+
+#define MBCCI_FM_SET_LD_ALLOC_HDR_SZ 4
+
+#define MBCCI_FM_GET_LD_ALLOC_HDR_SZ 4
+
 int parse_fm_get_ld_alloc_req(int argc, char **argv,
-			      struct cxlmi_cmd_fmapi_get_ld_allocations_req *req);
+			      struct fm_get_ld_alloc_params *params);
+size_t fm_set_ld_alloc_payload_size(uint8_t number_ld);
+size_t fm_get_ld_alloc_payload_size(uint8_t ld_allocation_list_len);
+int fm_ld_alloc_build_get_rsp_payload(
+	const struct cxlmi_cmd_fmapi_get_ld_allocations_rsp *rsp,
+	uint8_t *buf, size_t buf_sz, size_t *out_len);
+int fm_ld_alloc_normalize_set_payload(uint8_t *payload, size_t payload_len,
+				      const struct fm_set_ld_alloc_params *params,
+				      uint8_t *number_ld_out);
+int parse_fm_set_ld_alloc_req(int argc, char **argv,
+			      struct fm_set_ld_alloc_params *params);
 void print_fm_get_ld_alloc(
 	const struct cxlmi_cmd_fmapi_get_ld_allocations_rsp *rsp);
+void print_fm_set_ld_alloc(
+	const struct cxlmi_cmd_fmapi_set_ld_allocations_rsp *rsp);
 
 #endif /* MBCCI_SFX_H */
