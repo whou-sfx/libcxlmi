@@ -244,4 +244,46 @@ void print_fm_get_ld_alloc(
 void print_fm_set_ld_alloc(
 	const struct cxlmi_cmd_fmapi_set_ld_allocations_rsp *rsp);
 
+#define MBCCI_FM_QOS_LD_HDR_SZ 2
+
+struct fm_get_qos_ld_params {
+	struct cxlmi_cmd_fmapi_get_qos_allocated_bw_req req;
+	const char *raw_dump_file;
+};
+
+struct fm_set_qos_ld_params {
+	const char *input_file;
+	uint8_t number_ld;
+	uint8_t start_ld_id;
+	int has_number_ld;
+	int has_start_ld_id;
+};
+
+struct fm_set_qos_ctrl_params {
+	struct cxlmi_cmd_fmapi_set_qos_control_req req;
+	const char *input_file;
+};
+
+size_t fm_qos_ld_payload_size(uint8_t number_ld);
+void print_fm_qos_control(const struct cxlmi_cmd_fmapi_get_qos_control_rsp *rsp);
+void print_fm_qos_status(const struct cxlmi_cmd_fmapi_get_qos_status_rsp *rsp);
+void print_fm_qos_allocated_bw(
+	const struct cxlmi_cmd_fmapi_get_qos_allocated_bw_rsp *rsp);
+void print_fm_qos_bw_limit(const struct cxlmi_cmd_fmapi_get_qos_bw_limit_rsp *rsp);
+int parse_fm_get_qos_ld_req(int argc, char **argv,
+			    struct fm_get_qos_ld_params *params);
+int parse_fm_set_qos_ld_req(int argc, char **argv,
+			    struct fm_set_qos_ld_params *params);
+int fm_qos_ld_apply_set_overrides(uint8_t *payload, size_t payload_len,
+				  const struct fm_set_qos_ld_params *params,
+				  uint8_t *number_ld_out);
+int parse_fm_set_qos_ctrl_req(int argc, char **argv,
+			      struct fm_set_qos_ctrl_params *params);
+void fm_qos_ctrl_host_to_wire(const struct cxlmi_cmd_fmapi_set_qos_control_req *host,
+			      struct cxlmi_cmd_fmapi_set_qos_control_req *wire);
+void fm_qos_ctrl_wire_to_host(const struct cxlmi_cmd_fmapi_get_qos_control_rsp *wire,
+			      struct cxlmi_cmd_fmapi_get_qos_control_rsp *host);
+int fm_qos_ctrl_parse_input_payload(const uint8_t *payload, size_t payload_len,
+				    struct cxlmi_cmd_fmapi_set_qos_control_req *req);
+
 #endif /* MBCCI_SFX_H */

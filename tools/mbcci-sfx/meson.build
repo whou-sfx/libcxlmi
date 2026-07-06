@@ -12,6 +12,7 @@ executable(
         'cmd_health.c',
         'cmd_qos.c',
         'cmd_fm.c',
+        'cmd_fm_qos.c',
         'cmd_events.c',
         'cmd_vu_evtadd.c',
         'cmd_logs.c',

@@ -32,6 +32,13 @@
  *   fm-get-ld-info    FM Get LD Info (opcode 0x5400)
  *   fm-get-ld-alloc   FM Get LD Allocations (opcode 0x5401)
  *   fm-set-ld-alloc   FM Set LD Allocations (opcode 0x5402)
+ *   fm-get-qos-ctrl   FM Get QoS Control (opcode 0x5403)
+ *   fm-set-qos-ctrl   FM Set QoS Control (opcode 0x5404)
+ *   fm-get-qos-status FM Get QoS Status (opcode 0x5405)
+ *   fm-get-qos-alloc-bw FM Get QoS Allocated BW (opcode 0x5406)
+ *   fm-set-qos-alloc-bw FM Set QoS Allocated BW (opcode 0x5407)
+ *   fm-get-qos-bw-limit FM Get QoS BW Limit (opcode 0x5408)
+ *   fm-set-qos-bw-limit FM Set QoS BW Limit (opcode 0x5409)
  *   get-supported-logs Get Supported Logs (opcode 0x0400)
  *   get-log           Get Log (opcode 0x0401)
  *   get-log-cap       Get Log Capabilities (opcode 0x0402)
@@ -2746,6 +2753,855 @@ static int sdb_tunnel_fm_set_ld_alloc(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel fm-get-qos-ctrl (inner opcode 0x5403)                 */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_fm_get_qos_ctrl(struct cxlmi_endpoint *ep,
+				      int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+		struct cxlmi_cmd_fmapi_get_qos_control_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_fmapi_get_qos_control_rsp qos;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel fm-get-qos-ctrl [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x03; /* GET_QOS_CONTROL */
+	req.msg.command_set = 0x54; /* MLD_COMPONENTS  */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-get-qos-ctrl failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-get-qos-ctrl ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel fm-get-qos-ctrl: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	fm_qos_ctrl_wire_to_host(&rsp.rsp, &qos);
+	print_fm_qos_control(&qos);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel fm-set-qos-ctrl (inner opcode 0x5404)                 */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_fm_set_qos_ctrl(struct cxlmi_endpoint *ep,
+				      int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                         hdr;
+		struct cxlmi_cci_msg                              msg;
+		struct cxlmi_cmd_fmapi_set_qos_control_req        payload;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+		struct cxlmi_cmd_fmapi_set_qos_control_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	struct fm_set_qos_ctrl_params params;
+	struct cxlmi_cmd_fmapi_get_qos_control_rsp host_rsp;
+	char *ctrl_argv[16];
+	int ctrl_argc = 0;
+	uint8_t input_buf[sizeof(struct cxlmi_cmd_fmapi_set_qos_control_req)];
+	size_t input_len;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (ctrl_argc >= (int)(sizeof(ctrl_argv) / sizeof(ctrl_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel fm-set-qos-ctrl: too many arguments\n");
+				return -1;
+			}
+			ctrl_argv[ctrl_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_fm_set_qos_ctrl_req(ctrl_argc, ctrl_argv, &params);
+	if (rc)
+		return rc;
+
+	if (params.input_file) {
+		rc = read_hex_payload_file(params.input_file, input_buf,
+					   sizeof(input_buf), &input_len);
+		if (rc == -1) {
+			fprintf(stderr, "sdb-tunnel fm-set-qos-ctrl: cannot open '%s': ",
+				params.input_file);
+			perror(NULL);
+			return -1;
+		}
+		if (rc == -2) {
+			fprintf(stderr,
+				"sdb-tunnel fm-set-qos-ctrl: invalid hex in '%s'\n",
+				params.input_file);
+			return -1;
+		}
+		if (rc == -3 || fm_qos_ctrl_parse_input_payload(input_buf, input_len,
+								&params.req)) {
+			fprintf(stderr,
+				"sdb-tunnel fm-set-qos-ctrl: payload in '%s' must be "
+				"7 bytes\n", params.input_file);
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+
+	req.msg.command     = 0x04; /* SET_QOS_CONTROL */
+	req.msg.command_set = 0x54; /* MLD_COMPONENTS  */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] = (uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+
+	fm_qos_ctrl_host_to_wire(&params.req, &req.payload);
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-set-qos-ctrl failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-set-qos-ctrl ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-qos-ctrl: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	fm_qos_ctrl_wire_to_host((const struct cxlmi_cmd_fmapi_get_qos_control_rsp *)&rsp.rsp,
+				 &host_rsp);
+	print_fm_qos_control(&host_rsp);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel fm-get-qos-status (inner opcode 0x5405)               */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_fm_get_qos_status(struct cxlmi_endpoint *ep,
+					int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr  hdr;
+		struct cxlmi_cci_msg       msg;
+		struct cxlmi_cmd_fmapi_get_qos_status_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	struct cxlmi_cmd_fmapi_get_qos_status_rsp status;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel fm-get-qos-status [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+
+	req.msg.command     = 0x05; /* GET_QOS_STATUS */
+	req.msg.command_set = 0x54; /* MLD_COMPONENTS */
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-get-qos-status failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-get-qos-status ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel fm-get-qos-status: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	status.backpressure_avg_percentage = rsp.rsp.backpressure_avg_percentage;
+	print_fm_qos_status(&status);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel fm-get-qos-alloc-bw (inner opcode 0x5406)             */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_fm_get_qos_alloc_bw(struct cxlmi_endpoint *ep,
+					  int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                         hdr;
+		struct cxlmi_cci_msg                              msg;
+		struct cxlmi_cmd_fmapi_get_qos_allocated_bw_req   payload;
+	} __attribute__((packed)) req;
+
+	struct fm_get_qos_ld_params params;
+	char *get_argv[16];
+	int get_argc = 0;
+	uint8_t *rsp_buf = NULL;
+	uint8_t *host_buf = NULL;
+	struct cxlmi_cci_msg *inner_rsp;
+	struct cxlmi_cmd_fmapi_get_qos_allocated_bw_rsp *wire_rsp;
+	struct cxlmi_cmd_fmapi_get_qos_allocated_bw_rsp *host_rsp;
+	size_t rsp_buf_sz;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (get_argc >= (int)(sizeof(get_argv) / sizeof(get_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel fm-get-qos-alloc-bw: too many arguments\n");
+				return -1;
+			}
+			get_argv[get_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_fm_get_qos_ld_req(get_argc, get_argv, &params);
+	if (rc)
+		return rc;
+
+	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		     sizeof(struct cxlmi_cci_msg) +
+		     fm_qos_ld_payload_size(params.req.number_ld);
+
+	rsp_buf = calloc(1, rsp_buf_sz);
+	host_buf = calloc(1, fm_qos_ld_payload_size(params.req.number_ld));
+	if (!rsp_buf || !host_buf) {
+		fprintf(stderr, "sdb-tunnel fm-get-qos-alloc-bw: out of memory\n");
+		free(rsp_buf);
+		free(host_buf);
+		return -1;
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+
+	req.msg.command     = 0x06; /* GET_QOS_ALLOCATED_BW */
+	req.msg.command_set = 0x54; /* MLD_COMPONENTS       */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] = (uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+
+	req.payload.number_ld = params.req.number_ld;
+	req.payload.start_ld_id = params.req.start_ld_id;
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       rsp_buf, rsp_buf_sz);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-get-qos-alloc-bw failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-get-qos-alloc-bw ioctl failed\n");
+		free(rsp_buf);
+		free(host_buf);
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", rsp_buf, rsp_buf_sz);
+
+	inner_rsp = (struct cxlmi_cci_msg *)(rsp_buf + sizeof(struct sdb_tunnel_rsp_hdr));
+	if (inner_rsp->return_code != 0) {
+		uint16_t err = inner_rsp->return_code;
+
+		fprintf(stderr,
+			"sdb-tunnel fm-get-qos-alloc-bw: inner CCI error 0x%04x\n",
+			err);
+		free(rsp_buf);
+		free(host_buf);
+		return (int)err;
+	}
+
+	wire_rsp = (struct cxlmi_cmd_fmapi_get_qos_allocated_bw_rsp *)inner_rsp->payload;
+	host_rsp = (struct cxlmi_cmd_fmapi_get_qos_allocated_bw_rsp *)host_buf;
+	host_rsp->number_ld = wire_rsp->number_ld;
+	host_rsp->start_ld_id = wire_rsp->start_ld_id;
+	memcpy(host_rsp->qos_allocation_fraction, wire_rsp->qos_allocation_fraction,
+	       host_rsp->number_ld);
+	print_fm_qos_allocated_bw(host_rsp);
+
+	if (params.raw_dump_file) {
+		size_t pl_len = inner_rsp->pl_length[0] |
+				((size_t)inner_rsp->pl_length[1] << 8) |
+				((size_t)(inner_rsp->pl_length[2] & 0x0f) << 16);
+
+		if (!pl_len)
+			pl_len = fm_qos_ld_payload_size(host_rsp->number_ld);
+
+		rc = write_hex_payload_file(params.raw_dump_file,
+					    (const uint8_t *)wire_rsp, pl_len);
+		if (rc) {
+			fprintf(stderr,
+				"sdb-tunnel fm-get-qos-alloc-bw: failed to write '%s': ",
+				params.raw_dump_file);
+			perror(NULL);
+			free(rsp_buf);
+			free(host_buf);
+			return -1;
+		}
+		printf("Raw dump written to %s (%zu bytes, get-qos-alloc-bw response payload)\n",
+		       params.raw_dump_file, pl_len);
+	}
+
+	free(rsp_buf);
+	free(host_buf);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel fm-set-qos-alloc-bw (inner opcode 0x5407)             */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_fm_set_qos_alloc_bw(struct cxlmi_endpoint *ep,
+					  int argc, char **argv)
+{
+	struct fm_set_qos_ld_params params;
+	char *set_argv[16];
+	int set_argc = 0;
+	uint8_t *req_buf = NULL;
+	uint8_t *rsp_buf = NULL;
+	uint8_t *host_buf = NULL;
+	uint8_t payload[MBCCI_FM_QOS_LD_HDR_SZ + 255];
+	struct sdb_tunnel_req_hdr *req_hdr;
+	struct cxlmi_cci_msg *req_msg;
+	struct cxlmi_cci_msg *inner_rsp;
+	struct cxlmi_cmd_fmapi_set_qos_allocated_bw_rsp *wire_rsp;
+	struct cxlmi_cmd_fmapi_set_qos_allocated_bw_rsp *host_rsp;
+	size_t payload_len, req_buf_sz, rsp_buf_sz;
+	uint8_t port_id = 0, number_ld;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (set_argc >= (int)(sizeof(set_argv) / sizeof(set_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel fm-set-qos-alloc-bw: too many arguments\n");
+				return -1;
+			}
+			set_argv[set_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_fm_set_qos_ld_req(set_argc, set_argv, &params);
+	if (rc)
+		return rc;
+
+	rc = read_hex_payload_file(params.input_file, payload,
+				   sizeof(payload), &payload_len);
+	if (rc == -1) {
+		fprintf(stderr, "sdb-tunnel fm-set-qos-alloc-bw: cannot open '%s': ",
+			params.input_file);
+		perror(NULL);
+		return -1;
+	}
+	if (rc == -2) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-qos-alloc-bw: invalid hex in '%s'\n",
+			params.input_file);
+		return -1;
+	}
+	if (rc == -3) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-qos-alloc-bw: payload in '%s' exceeds maximum size\n",
+			params.input_file);
+		return -1;
+	}
+
+	if (payload_len < MBCCI_FM_QOS_LD_HDR_SZ) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-qos-alloc-bw: payload size %zu is too small\n",
+			payload_len);
+		return -1;
+	}
+
+	rc = fm_qos_ld_apply_set_overrides(payload, payload_len, &params,
+					   &number_ld);
+	if (rc) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-qos-alloc-bw: payload in '%s' is not "
+			"2 + N bytes\n", params.input_file);
+		return -1;
+	}
+
+	req_buf_sz = sizeof(struct sdb_tunnel_req_hdr) +
+		     sizeof(struct cxlmi_cci_msg) + payload_len;
+	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		     sizeof(struct cxlmi_cci_msg) +
+		     fm_qos_ld_payload_size(number_ld);
+
+	req_buf = calloc(1, req_buf_sz);
+	rsp_buf = calloc(1, rsp_buf_sz);
+	host_buf = calloc(1, fm_qos_ld_payload_size(number_ld));
+	if (!req_buf || !rsp_buf || !host_buf) {
+		fprintf(stderr, "sdb-tunnel fm-set-qos-alloc-bw: out of memory\n");
+		free(req_buf);
+		free(rsp_buf);
+		free(host_buf);
+		return -1;
+	}
+
+	req_hdr = (struct sdb_tunnel_req_hdr *)req_buf;
+	req_msg = (struct cxlmi_cci_msg *)(req_buf + sizeof(*req_hdr));
+
+	req_hdr->id           = port_id;
+	req_hdr->target_type  = 0;
+	req_hdr->command_size = (uint16_t)(sizeof(*req_msg) + payload_len);
+
+	req_msg->command     = 0x07; /* SET_QOS_ALLOCATED_BW */
+	req_msg->command_set = 0x54; /* MLD_COMPONENTS       */
+	req_msg->pl_length[0] = (uint8_t)(payload_len & 0xff);
+	req_msg->pl_length[1] = (uint8_t)((payload_len >> 8) & 0xff);
+	req_msg->pl_length[2] = (uint8_t)((payload_len >> 16) & 0xff);
+	memcpy(req_msg->payload, payload, payload_len);
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", req_buf, req_buf_sz);
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       req_buf, req_buf_sz,
+				       rsp_buf, rsp_buf_sz);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-set-qos-alloc-bw failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-set-qos-alloc-bw ioctl failed\n");
+		free(req_buf);
+		free(rsp_buf);
+		free(host_buf);
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", rsp_buf, rsp_buf_sz);
+
+	inner_rsp = (struct cxlmi_cci_msg *)(rsp_buf + sizeof(struct sdb_tunnel_rsp_hdr));
+	if (inner_rsp->return_code != 0) {
+		uint16_t err = inner_rsp->return_code;
+
+		fprintf(stderr,
+			"sdb-tunnel fm-set-qos-alloc-bw: inner CCI error 0x%04x\n",
+			err);
+		free(req_buf);
+		free(rsp_buf);
+		free(host_buf);
+		return (int)err;
+	}
+
+	wire_rsp = (struct cxlmi_cmd_fmapi_set_qos_allocated_bw_rsp *)inner_rsp->payload;
+	host_rsp = (struct cxlmi_cmd_fmapi_set_qos_allocated_bw_rsp *)host_buf;
+	host_rsp->number_ld = wire_rsp->number_ld;
+	host_rsp->start_ld_id = wire_rsp->start_ld_id;
+	memcpy(host_rsp->qos_allocation_fraction, wire_rsp->qos_allocation_fraction,
+	       host_rsp->number_ld);
+	print_fm_qos_allocated_bw((const struct cxlmi_cmd_fmapi_get_qos_allocated_bw_rsp *)host_rsp);
+
+	free(req_buf);
+	free(rsp_buf);
+	free(host_buf);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel fm-get-qos-bw-limit (inner opcode 0x5408)             */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_fm_get_qos_bw_limit(struct cxlmi_endpoint *ep,
+					  int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                     hdr;
+		struct cxlmi_cci_msg                          msg;
+		struct cxlmi_cmd_fmapi_get_qos_bw_limit_req   payload;
+	} __attribute__((packed)) req;
+
+	struct fm_get_qos_ld_params params;
+	char *get_argv[16];
+	int get_argc = 0;
+	uint8_t *rsp_buf = NULL;
+	uint8_t *host_buf = NULL;
+	struct cxlmi_cci_msg *inner_rsp;
+	struct cxlmi_cmd_fmapi_get_qos_bw_limit_rsp *wire_rsp;
+	struct cxlmi_cmd_fmapi_get_qos_bw_limit_rsp *host_rsp;
+	size_t rsp_buf_sz;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (get_argc >= (int)(sizeof(get_argv) / sizeof(get_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel fm-get-qos-bw-limit: too many arguments\n");
+				return -1;
+			}
+			get_argv[get_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_fm_get_qos_ld_req(get_argc, get_argv, &params);
+	if (rc)
+		return rc;
+
+	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		     sizeof(struct cxlmi_cci_msg) +
+		     fm_qos_ld_payload_size(params.req.number_ld);
+
+	rsp_buf = calloc(1, rsp_buf_sz);
+	host_buf = calloc(1, fm_qos_ld_payload_size(params.req.number_ld));
+	if (!rsp_buf || !host_buf) {
+		fprintf(stderr, "sdb-tunnel fm-get-qos-bw-limit: out of memory\n");
+		free(rsp_buf);
+		free(host_buf);
+		return -1;
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+
+	req.msg.command     = 0x08; /* GET_QOS_BW_LIMIT */
+	req.msg.command_set = 0x54; /* MLD_COMPONENTS   */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] = (uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+
+	req.payload.number_ld = params.req.number_ld;
+	req.payload.start_ld_id = params.req.start_ld_id;
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       rsp_buf, rsp_buf_sz);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-get-qos-bw-limit failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-get-qos-bw-limit ioctl failed\n");
+		free(rsp_buf);
+		free(host_buf);
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", rsp_buf, rsp_buf_sz);
+
+	inner_rsp = (struct cxlmi_cci_msg *)(rsp_buf + sizeof(struct sdb_tunnel_rsp_hdr));
+	if (inner_rsp->return_code != 0) {
+		uint16_t err = inner_rsp->return_code;
+
+		fprintf(stderr,
+			"sdb-tunnel fm-get-qos-bw-limit: inner CCI error 0x%04x\n",
+			err);
+		free(rsp_buf);
+		free(host_buf);
+		return (int)err;
+	}
+
+	wire_rsp = (struct cxlmi_cmd_fmapi_get_qos_bw_limit_rsp *)inner_rsp->payload;
+	host_rsp = (struct cxlmi_cmd_fmapi_get_qos_bw_limit_rsp *)host_buf;
+	host_rsp->number_ld = wire_rsp->number_ld;
+	host_rsp->start_ld_id = wire_rsp->start_ld_id;
+	memcpy(host_rsp->qos_limit_fraction, wire_rsp->qos_limit_fraction,
+	       host_rsp->number_ld);
+	print_fm_qos_bw_limit(host_rsp);
+
+	if (params.raw_dump_file) {
+		size_t pl_len = inner_rsp->pl_length[0] |
+				((size_t)inner_rsp->pl_length[1] << 8) |
+				((size_t)(inner_rsp->pl_length[2] & 0x0f) << 16);
+
+		if (!pl_len)
+			pl_len = fm_qos_ld_payload_size(host_rsp->number_ld);
+
+		rc = write_hex_payload_file(params.raw_dump_file,
+					    (const uint8_t *)wire_rsp, pl_len);
+		if (rc) {
+			fprintf(stderr,
+				"sdb-tunnel fm-get-qos-bw-limit: failed to write '%s': ",
+				params.raw_dump_file);
+			perror(NULL);
+			free(rsp_buf);
+			free(host_buf);
+			return -1;
+		}
+		printf("Raw dump written to %s (%zu bytes, get-qos-bw-limit response payload)\n",
+		       params.raw_dump_file, pl_len);
+	}
+
+	free(rsp_buf);
+	free(host_buf);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* sdb-tunnel fm-set-qos-bw-limit (inner opcode 0x5409)             */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_fm_set_qos_bw_limit(struct cxlmi_endpoint *ep,
+					  int argc, char **argv)
+{
+	struct fm_set_qos_ld_params params;
+	char *set_argv[16];
+	int set_argc = 0;
+	uint8_t *req_buf = NULL;
+	uint8_t *rsp_buf = NULL;
+	uint8_t *host_buf = NULL;
+	uint8_t payload[MBCCI_FM_QOS_LD_HDR_SZ + 255];
+	struct sdb_tunnel_req_hdr *req_hdr;
+	struct cxlmi_cci_msg *req_msg;
+	struct cxlmi_cci_msg *inner_rsp;
+	struct cxlmi_cmd_fmapi_set_qos_bw_limit_rsp *wire_rsp;
+	struct cxlmi_cmd_fmapi_set_qos_bw_limit_rsp *host_rsp;
+	size_t payload_len, req_buf_sz, rsp_buf_sz;
+	uint8_t port_id = 0, number_ld;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (set_argc >= (int)(sizeof(set_argv) / sizeof(set_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel fm-set-qos-bw-limit: too many arguments\n");
+				return -1;
+			}
+			set_argv[set_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_fm_set_qos_ld_req(set_argc, set_argv, &params);
+	if (rc)
+		return rc;
+
+	rc = read_hex_payload_file(params.input_file, payload,
+				   sizeof(payload), &payload_len);
+	if (rc == -1) {
+		fprintf(stderr, "sdb-tunnel fm-set-qos-bw-limit: cannot open '%s': ",
+			params.input_file);
+		perror(NULL);
+		return -1;
+	}
+	if (rc == -2) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-qos-bw-limit: invalid hex in '%s'\n",
+			params.input_file);
+		return -1;
+	}
+	if (rc == -3) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-qos-bw-limit: payload in '%s' exceeds maximum size\n",
+			params.input_file);
+		return -1;
+	}
+
+	if (payload_len < MBCCI_FM_QOS_LD_HDR_SZ) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-qos-bw-limit: payload size %zu is too small\n",
+			payload_len);
+		return -1;
+	}
+
+	rc = fm_qos_ld_apply_set_overrides(payload, payload_len, &params,
+					   &number_ld);
+	if (rc) {
+		fprintf(stderr,
+			"sdb-tunnel fm-set-qos-bw-limit: payload in '%s' is not "
+			"2 + N bytes\n", params.input_file);
+		return -1;
+	}
+
+	req_buf_sz = sizeof(struct sdb_tunnel_req_hdr) +
+		     sizeof(struct cxlmi_cci_msg) + payload_len;
+	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		     sizeof(struct cxlmi_cci_msg) +
+		     fm_qos_ld_payload_size(number_ld);
+
+	req_buf = calloc(1, req_buf_sz);
+	rsp_buf = calloc(1, rsp_buf_sz);
+	host_buf = calloc(1, fm_qos_ld_payload_size(number_ld));
+	if (!req_buf || !rsp_buf || !host_buf) {
+		fprintf(stderr, "sdb-tunnel fm-set-qos-bw-limit: out of memory\n");
+		free(req_buf);
+		free(rsp_buf);
+		free(host_buf);
+		return -1;
+	}
+
+	req_hdr = (struct sdb_tunnel_req_hdr *)req_buf;
+	req_msg = (struct cxlmi_cci_msg *)(req_buf + sizeof(*req_hdr));
+
+	req_hdr->id           = port_id;
+	req_hdr->target_type  = 0;
+	req_hdr->command_size = (uint16_t)(sizeof(*req_msg) + payload_len);
+
+	req_msg->command     = 0x09; /* SET_QOS_BW_LIMIT */
+	req_msg->command_set = 0x54; /* MLD_COMPONENTS   */
+	req_msg->pl_length[0] = (uint8_t)(payload_len & 0xff);
+	req_msg->pl_length[1] = (uint8_t)((payload_len >> 8) & 0xff);
+	req_msg->pl_length[2] = (uint8_t)((payload_len >> 16) & 0xff);
+	memcpy(req_msg->payload, payload, payload_len);
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", req_buf, req_buf_sz);
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       req_buf, req_buf_sz,
+				       rsp_buf, rsp_buf_sz);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-set-qos-bw-limit failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-set-qos-bw-limit ioctl failed\n");
+		free(req_buf);
+		free(rsp_buf);
+		free(host_buf);
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", rsp_buf, rsp_buf_sz);
+
+	inner_rsp = (struct cxlmi_cci_msg *)(rsp_buf + sizeof(struct sdb_tunnel_rsp_hdr));
+	if (inner_rsp->return_code != 0) {
+		uint16_t err = inner_rsp->return_code;
+
+		fprintf(stderr,
+			"sdb-tunnel fm-set-qos-bw-limit: inner CCI error 0x%04x\n",
+			err);
+		free(req_buf);
+		free(rsp_buf);
+		free(host_buf);
+		return (int)err;
+	}
+
+	wire_rsp = (struct cxlmi_cmd_fmapi_set_qos_bw_limit_rsp *)inner_rsp->payload;
+	host_rsp = (struct cxlmi_cmd_fmapi_set_qos_bw_limit_rsp *)host_buf;
+	host_rsp->number_ld = wire_rsp->number_ld;
+	host_rsp->start_ld_id = wire_rsp->start_ld_id;
+	memcpy(host_rsp->qos_limit_fraction, wire_rsp->qos_limit_fraction,
+	       host_rsp->number_ld);
+	print_fm_qos_bw_limit((const struct cxlmi_cmd_fmapi_get_qos_bw_limit_rsp *)host_rsp);
+
+	free(req_buf);
+	free(rsp_buf);
+	free(host_buf);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* sdb-tunnel get-supported-logs (inner opcode 0x0400)                */
 /* ------------------------------------------------------------------ */
 
@@ -3787,6 +4643,18 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"                                                                         FM Get LD Allocations (0x5401)\n"
 			"  fm-set-ld-alloc    [--port <vdm0|vdm1|i3c>] --input <hexfile> [--number-ld <n>] [--start-ld-id <n>]\n"
 			"                                                                         FM Set LD Allocations (0x5402)\n"
+			"  fm-get-qos-ctrl    [--port <vdm0|vdm1|i3c>]                        FM Get QoS Control (0x5403)\n"
+			"  fm-set-qos-ctrl    [--port <vdm0|vdm1|i3c>] [--egress-congestion-control-enable <0|1>] [--egress-tpr-enable <0|1>] ...\n"
+			"                     [--input <hexfile>]                               FM Set QoS Control (0x5404)\n"
+			"  fm-get-qos-status  [--port <vdm0|vdm1|i3c>]                        FM Get QoS Status (0x5405)\n"
+			"  fm-get-qos-alloc-bw [--port <vdm0|vdm1|i3c>] [--number-ld <n>] [--start-ld-id <n>] [--raw-dump <file>]\n"
+			"                                                                         FM Get QoS Allocated BW (0x5406)\n"
+			"  fm-set-qos-alloc-bw [--port <vdm0|vdm1|i3c>] --input <hexfile> [--number-ld <n>] [--start-ld-id <n>]\n"
+			"                                                                         FM Set QoS Allocated BW (0x5407)\n"
+			"  fm-get-qos-bw-limit [--port <vdm0|vdm1|i3c>] [--number-ld <n>] [--start-ld-id <n>] [--raw-dump <file>]\n"
+			"                                                                         FM Get QoS BW Limit (0x5408)\n"
+			"  fm-set-qos-bw-limit [--port <vdm0|vdm1|i3c>] --input <hexfile> [--number-ld <n>] [--start-ld-id <n>]\n"
+			"                                                                         FM Set QoS BW Limit (0x5409)\n"
 			"  get-supported-logs [--port <vdm0|vdm1|i3c>]                        Get Supported Logs (0x0400)\n"
 			"  get-supported-feat [--port <vdm0|vdm1|i3c>] [--count <bytes>] [--start-index <n>]\n"
 			"                                                                         Get Supported Features (0x0500)\n"
@@ -3844,6 +4712,20 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_fm_get_ld_alloc(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "fm-set-ld-alloc") == 0)
 		return sdb_tunnel_fm_set_ld_alloc(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-get-qos-ctrl") == 0)
+		return sdb_tunnel_fm_get_qos_ctrl(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-set-qos-ctrl") == 0)
+		return sdb_tunnel_fm_set_qos_ctrl(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-get-qos-status") == 0)
+		return sdb_tunnel_fm_get_qos_status(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-get-qos-alloc-bw") == 0)
+		return sdb_tunnel_fm_get_qos_alloc_bw(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-set-qos-alloc-bw") == 0)
+		return sdb_tunnel_fm_set_qos_alloc_bw(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-get-qos-bw-limit") == 0)
+		return sdb_tunnel_fm_get_qos_bw_limit(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-set-qos-bw-limit") == 0)
+		return sdb_tunnel_fm_set_qos_bw_limit(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-supported-logs") == 0)
 		return sdb_tunnel_get_supported_logs(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-supported-feat") == 0)
@@ -3883,7 +4765,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, fm-set-ld-alloc, get-supported-logs, get-supported-feat, get-feature, set-feature, get-log, get-log-cap, clear-log, populate-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, fm-set-ld-alloc, fm-get-qos-ctrl, fm-set-qos-ctrl, fm-get-qos-status, fm-get-qos-alloc-bw, fm-set-qos-alloc-bw, fm-get-qos-bw-limit, fm-set-qos-bw-limit, get-supported-logs, get-supported-feat, get-feature, set-feature, get-log, get-log-cap, clear-log, populate-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");
