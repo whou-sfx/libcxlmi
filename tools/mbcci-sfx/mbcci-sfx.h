@@ -112,6 +112,24 @@ int vu_dlcfg_file(struct cxlmi_endpoint *ep,
 		  vu_dlcfg_send_fn send_fn, void *send_ctx);
 int cmd_vu_dlcfg(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+#define VU_GETCFG_OUT_PAYLOAD 512
+#define VU_GETCFG_REQ_BYTES   32
+#define VU_GETCFG_OUTPUT_BYTES (8 + VU_GETCFG_OUT_PAYLOAD)
+
+struct vu_getdevcfg_params {
+	const char *output_file;
+};
+
+typedef int (*vu_getcfg_send_fn)(struct cxlmi_endpoint *ep, void *ctx,
+				 void *req, void *out);
+
+int parse_vu_getdevcfg_req(int argc, char **argv,
+			   struct vu_getdevcfg_params *params);
+int vu_getdevcfg_fetch(struct cxlmi_endpoint *ep,
+		       const struct vu_getdevcfg_params *params,
+		       vu_getcfg_send_fn send_fn, void *send_ctx);
+int cmd_vu_getdevcfg(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log_cap(struct cxlmi_endpoint *ep, int argc, char **argv);

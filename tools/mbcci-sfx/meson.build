@@ -16,6 +16,7 @@ executable(
         'cmd_events.c',
         'cmd_vu_evtadd.c',
         'cmd_vu_dlcfg.c',
+        'cmd_vu_getdevcfg.c',
         'cmd_logs.c',
         'cmd_features.c',
         'cmd_feature_decode.c',

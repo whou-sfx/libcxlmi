@@ -43,6 +43,7 @@ enum VU_0xCC53_CMD_ID_E {
 	DLBOOTLOADER                                                    = 0x03U,
 	CLRBOOTLOADER                                                   = 0x04U,
 	DLCFG                                                           = 0x07U,
+	GETCFG                                                          = 0x08U,
 	CFGFREQ                                                         = 0x09U,
 	SHOWCFGINFO                                                     = 0x0cU,
 	DDRINFO                                                         = 0x0dU,
@@ -353,6 +354,40 @@ typedef union
 	dlcfg_input *input;
 	dlcfg_output *output;
 }  __packed dlcfg_data;
+
+
+
+
+// For VU: getcfg
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	offset;
+	 u32	length;
+	 u32	arg3;
+	 u32	arg4;
+} getcfg;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed getcfg_input;
+// The VU output command data definition
+typedef struct 
+{
+	u32         more;
+	u32         respLen;
+	unsigned char          payload[512];
+}  __packed getcfg_output;
+// The VU command data definition
+typedef union 
+{
+	getcfg_input *input;
+	getcfg_output *output;
+}  __packed getcfg_data;
 
 
 
