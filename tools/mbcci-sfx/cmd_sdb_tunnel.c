@@ -953,6 +953,112 @@ static int sdb_tunnel_vu_getdevcfg(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel vu-ddrfreq / vu-pciespeed (0xCC53 / 0x09 / 0x0a)      */
+/* ------------------------------------------------------------------ */
+
+static int sdb_tunnel_vu_ddrfreq(struct cxlmi_endpoint *ep,
+				 int argc, char **argv)
+{
+	struct vu_ddrfreq_params params;
+	uint8_t req[VU_CFGFREQ_REQ_BYTES];
+	struct sdb_vu_dlcfg_ctx ctx = { 0 };
+	char *part_argv[16];
+	int part_argc = 0;
+	size_t req_sz;
+	int rc, lock_rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			ctx.port_id = (uint8_t)rc;
+		} else {
+			if (part_argc >= (int)(sizeof(part_argv) / sizeof(part_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel vu-ddrfreq: too many arguments\n");
+				return -1;
+			}
+			part_argv[part_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_vu_ddrfreq_req(part_argc, part_argv, &params);
+	if (rc)
+		return rc;
+
+	req_sz = vu_ddrfreq_pack(&params, req, sizeof(req));
+	if (req_sz == 0)
+		return -1;
+
+	rc = sdb_vu_tunnel_unlock(ep, ctx.port_id);
+	if (rc)
+		return rc;
+
+	rc = sdb_vu_tunnel_send(ep, ctx.port_id, req, req_sz);
+
+	lock_rc = sdb_vu_tunnel_lock(ep, ctx.port_id);
+	if (rc == 0)
+		rc = lock_rc;
+
+	if (rc == 0)
+		printf("vu-ddrfreq OK: freq=%u MT/s\n", params.freqmts);
+	return rc;
+}
+
+static int sdb_tunnel_vu_pciespeed(struct cxlmi_endpoint *ep,
+				   int argc, char **argv)
+{
+	struct vu_pciespeed_params params;
+	uint8_t req[VU_CFGPCIE_REQ_BYTES];
+	struct sdb_vu_dlcfg_ctx ctx = { 0 };
+	char *part_argv[16];
+	int part_argc = 0;
+	size_t req_sz;
+	int rc, lock_rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			ctx.port_id = (uint8_t)rc;
+		} else {
+			if (part_argc >= (int)(sizeof(part_argv) / sizeof(part_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel vu-pciespeed: too many arguments\n");
+				return -1;
+			}
+			part_argv[part_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_vu_pciespeed_req(part_argc, part_argv, &params);
+	if (rc)
+		return rc;
+
+	req_sz = vu_pciespeed_pack(&params, req, sizeof(req));
+	if (req_sz == 0)
+		return -1;
+
+	rc = sdb_vu_tunnel_unlock(ep, ctx.port_id);
+	if (rc)
+		return rc;
+
+	rc = sdb_vu_tunnel_send(ep, ctx.port_id, req, req_sz);
+
+	lock_rc = sdb_vu_tunnel_lock(ep, ctx.port_id);
+	if (rc == 0)
+		rc = lock_rc;
+
+	if (rc == 0) {
+		printf("vu-pciespeed OK: pcie-port=%u speed=gen%u width=x%u\n",
+		       params.portid, params.speed, params.width);
+	}
+	return rc;
+}
+
+/* ------------------------------------------------------------------ */
 /* sdb-tunnel activate-fw (inner opcode 0x0202)                       */
 /* ------------------------------------------------------------------ */
 
@@ -4854,6 +4960,10 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"                                                                         VU Download Config (0xCC53/0x07)\n"
 			"  vu-getdevcfg       [--port <vdm0|vdm1|i3c>] --output <file>\n"
 			"                                                                         VU Get DEV Config (0xCC53/0x08)\n"
+			"  vu-ddrfreq         [--port <vdm0|vdm1|i3c>] --freq <n>\n"
+			"                                                                         VU Set DDR Freq (0xCC53/0x09)\n"
+			"  vu-pciespeed       [--port <vdm0|vdm1|i3c>] --pcie-port <0|1> --speed <genN> --width <xN>\n"
+			"                                                                         VU Set PCIe Speed (0xCC53/0x0a)\n"
 			"  activate-fw        [--port <vdm0|vdm1|i3c>] --slot <n> [--action online|offline]\n"
 			"                                                                         Activate FW (0x0202)\n"
 			"  get-health-info    [--port <vdm0|vdm1|i3c>]                        Get Health Info (0x4200)\n"
@@ -4922,6 +5032,10 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_vu_dlcfg(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "vu-getdevcfg") == 0)
 		return sdb_tunnel_vu_getdevcfg(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "vu-ddrfreq") == 0)
+		return sdb_tunnel_vu_ddrfreq(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "vu-pciespeed") == 0)
+		return sdb_tunnel_vu_pciespeed(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "activate-fw") == 0)
 		return sdb_tunnel_activate_fw(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-health-info") == 0)

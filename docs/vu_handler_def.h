@@ -45,6 +45,7 @@ enum VU_0xCC53_CMD_ID_E {
 	DLCFG                                                           = 0x07U,
 	GETCFG                                                          = 0x08U,
 	CFGFREQ                                                         = 0x09U,
+	CFGPCIE                                                         = 0x0aU,
 	SHOWCFGINFO                                                     = 0x0cU,
 	DDRINFO                                                         = 0x0dU,
 	HOSTLOGDBG                                                      = 0x0eU,
@@ -400,7 +401,7 @@ typedef struct
 	 u32	status;
 	 u32	in_sz;
 	 u32	out_sz;
-	 u32	slot;
+	 u32	freqmts;
 	 u32	arg2;
 	 u32	arg3;
 	 u32	arg4;
@@ -419,6 +420,37 @@ typedef union
 	cfgfreq_input *input;
 	cfgfreq_output *output;
 }  __packed cfgfreq_data;
+
+
+
+
+// For VU: cfgpcie
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	portid;
+	 u32	speed;
+	 u32	width;
+	 u32	arg4;
+} cfgpcie;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed cfgpcie_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed cfgpcie_output;
+// The VU command data definition
+typedef union 
+{
+	cfgpcie_input *input;
+	cfgpcie_output *output;
+}  __packed cfgpcie_data;
 
 
 

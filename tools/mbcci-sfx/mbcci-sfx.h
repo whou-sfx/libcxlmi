@@ -130,6 +130,34 @@ int vu_getdevcfg_fetch(struct cxlmi_endpoint *ep,
 		       vu_getcfg_send_fn send_fn, void *send_ctx);
 int cmd_vu_getdevcfg(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+#define VU_CFGFREQ_REQ_BYTES  32
+#define VU_CFGPCIE_REQ_BYTES  32
+
+struct vu_ddrfreq_params {
+	uint32_t freqmts;
+};
+
+struct vu_pciespeed_params {
+	uint32_t portid;
+	uint32_t speed;
+	uint32_t width;
+};
+
+size_t vu_ddrfreq_pack(const struct vu_ddrfreq_params *params,
+		       void *buf, size_t buf_sz);
+size_t vu_pciespeed_pack(const struct vu_pciespeed_params *params,
+			 void *buf, size_t buf_sz);
+int parse_vu_ddrfreq_req(int argc, char **argv,
+			 struct vu_ddrfreq_params *params);
+int parse_vu_pciespeed_req(int argc, char **argv,
+			   struct vu_pciespeed_params *params);
+int vu_ddrfreq_send(struct cxlmi_endpoint *ep,
+		    const struct vu_ddrfreq_params *params);
+int vu_pciespeed_send(struct cxlmi_endpoint *ep,
+		      const struct vu_pciespeed_params *params);
+int cmd_vu_ddrfreq(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_vu_pciespeed(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log_cap(struct cxlmi_endpoint *ep, int argc, char **argv);
