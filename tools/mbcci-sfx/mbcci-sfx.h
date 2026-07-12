@@ -95,6 +95,23 @@ int cmd_set_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **a
 
 int cmd_vu_evtadd(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+struct vu_dlcfg_params {
+	const char *input_file;
+	uint32_t cfg_type;
+	uint32_t chunk_size;
+};
+
+typedef int (*vu_dlcfg_send_fn)(struct cxlmi_endpoint *ep, void *ctx,
+				void *req, size_t req_sz);
+
+int vu_mb_unlock(struct cxlmi_endpoint *ep);
+int vu_mb_lock(struct cxlmi_endpoint *ep);
+int parse_vu_dlcfg_req(int argc, char **argv, struct vu_dlcfg_params *params);
+int vu_dlcfg_file(struct cxlmi_endpoint *ep,
+		  const struct vu_dlcfg_params *params,
+		  vu_dlcfg_send_fn send_fn, void *send_ctx);
+int cmd_vu_dlcfg(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log_cap(struct cxlmi_endpoint *ep, int argc, char **argv);

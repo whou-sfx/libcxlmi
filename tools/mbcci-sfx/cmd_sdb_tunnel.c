@@ -731,6 +731,148 @@ static int sdb_tunnel_transfer_fw(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel vu-dlcfg (inner opcode 0xCC53 / vuCmdId DLCFG=0x07)     */
+/* ------------------------------------------------------------------ */
+
+#define SDB_VU_CMD_SET 0xCC
+#define SDB_VU_CMD     0x53
+
+struct sdb_vu_dlcfg_ctx {
+	uint8_t port_id;
+};
+
+static int sdb_vu_tunnel_send(struct cxlmi_endpoint *ep, uint8_t port_id,
+			      const void *vu_payload, size_t vu_payload_sz)
+{
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+	size_t full_req_sz = sizeof(struct sdb_tunnel_req_hdr) +
+			     sizeof(struct cxlmi_cci_msg) + vu_payload_sz;
+	uint8_t *req_buf = NULL;
+	struct sdb_tunnel_req_hdr *req_hdr;
+	struct cxlmi_cci_msg *req_msg;
+	uint8_t *req_pl;
+	int rc;
+
+	req_buf = calloc(1, full_req_sz);
+	if (!req_buf) {
+		fprintf(stderr, "sdb-tunnel vu-dlcfg: out of memory\n");
+		return -1;
+	}
+
+	req_hdr = (struct sdb_tunnel_req_hdr *)req_buf;
+	req_msg = (struct cxlmi_cci_msg *)(req_buf + sizeof(*req_hdr));
+	req_pl  = req_buf + sizeof(*req_hdr) + sizeof(*req_msg);
+
+	req_hdr->id           = port_id;
+	req_hdr->target_type  = 0;
+	req_hdr->command_size = (uint16_t)(sizeof(*req_msg) + vu_payload_sz);
+
+	req_msg->command     = SDB_VU_CMD;
+	req_msg->command_set = SDB_VU_CMD_SET;
+	req_msg->pl_length[0] = (uint8_t)(vu_payload_sz & 0xff);
+	req_msg->pl_length[1] = (uint8_t)((vu_payload_sz >> 8) & 0xff);
+
+	memcpy(req_pl, vu_payload, vu_payload_sz);
+
+	memset(&rsp, 0, sizeof(rsp));
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", req_buf, full_req_sz);
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       req_buf, full_req_sz,
+				       &rsp, sizeof(rsp));
+	free(req_buf);
+
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel vu-dlcfg failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel vu-dlcfg ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel vu-dlcfg: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	return 0;
+}
+
+static int sdb_vu_tunnel_unlock(struct cxlmi_endpoint *ep, uint8_t port_id)
+{
+	uint32_t req[8] = { 0 };
+
+	req[0] = 0; /* VUUNLOCK */
+	return sdb_vu_tunnel_send(ep, port_id, req, sizeof(req));
+}
+
+static int sdb_vu_tunnel_lock(struct cxlmi_endpoint *ep, uint8_t port_id)
+{
+	uint32_t req[8] = { 0 };
+
+	req[0] = 1; /* VULOCK */
+	return sdb_vu_tunnel_send(ep, port_id, req, sizeof(req));
+}
+
+static int sdb_vu_dlcfg_send(struct cxlmi_endpoint *ep, void *ctx,
+			     void *req, size_t req_sz)
+{
+	struct sdb_vu_dlcfg_ctx *sctx = ctx;
+
+	return sdb_vu_tunnel_send(ep, sctx->port_id, req, req_sz);
+}
+
+static int sdb_tunnel_vu_dlcfg(struct cxlmi_endpoint *ep, int argc, char **argv)
+{
+	struct vu_dlcfg_params params;
+	struct sdb_vu_dlcfg_ctx ctx = { 0 };
+	char *part_argv[16];
+	int part_argc = 0;
+	int rc, lock_rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			ctx.port_id = (uint8_t)rc;
+		} else {
+			if (part_argc >= (int)(sizeof(part_argv) / sizeof(part_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel vu-dlcfg: too many arguments\n");
+				return -1;
+			}
+			part_argv[part_argc++] = argv[i];
+		}
+	}
+
+	rc = parse_vu_dlcfg_req(part_argc, part_argv, &params);
+	if (rc)
+		return rc;
+
+	rc = sdb_vu_tunnel_unlock(ep, ctx.port_id);
+	if (rc)
+		return rc;
+
+	rc = vu_dlcfg_file(ep, &params, sdb_vu_dlcfg_send, &ctx);
+
+	lock_rc = sdb_vu_tunnel_lock(ep, ctx.port_id);
+	if (rc == 0)
+		rc = lock_rc;
+
+	return rc;
+}
+
+/* ------------------------------------------------------------------ */
 /* sdb-tunnel activate-fw (inner opcode 0x0202)                       */
 /* ------------------------------------------------------------------ */
 
@@ -4628,6 +4770,8 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  get-fw-info        [--port <vdm0|vdm1|i3c>]                        Get FW Info (0x0200)\n"
 			"  transfer-fw        [--port <vdm0|vdm1|i3c>] --input <file> --slot <n> [--chunk-size <n>]\n"
 			"                                                                         Transfer FW (0x0201)\n"
+			"  vu-dlcfg           [--port <vdm0|vdm1|i3c>] --input <file> --cfg-type <DEV|DDR> [--chunk-size <n>]\n"
+			"                                                                         VU Download Config (0xCC53/0x07)\n"
 			"  activate-fw        [--port <vdm0|vdm1|i3c>] --slot <n> [--action online|offline]\n"
 			"                                                                         Activate FW (0x0202)\n"
 			"  get-health-info    [--port <vdm0|vdm1|i3c>]                        Get Health Info (0x4200)\n"
@@ -4692,6 +4836,8 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_get_fw_info(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "transfer-fw") == 0)
 		return sdb_tunnel_transfer_fw(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "vu-dlcfg") == 0)
+		return sdb_tunnel_vu_dlcfg(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "activate-fw") == 0)
 		return sdb_tunnel_activate_fw(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-health-info") == 0)

@@ -42,13 +42,8 @@ enum VU_0xCC53_CMD_ID_E {
 	VERSION                                                         = 0x02U,
 	DLBOOTLOADER                                                    = 0x03U,
 	CLRBOOTLOADER                                                   = 0x04U,
-	DLSSS                                                           = 0x05U,
-	CLRSSS                                                          = 0x06U,
 	DLCFG                                                           = 0x07U,
-	CFGTEST                                                         = 0x08U,
 	CFGFREQ                                                         = 0x09U,
-	CFGTYPE                                                         = 0x0aU,
-	CFGVENDOR                                                       = 0x0bU,
 	SHOWCFGINFO                                                     = 0x0cU,
 	DDRINFO                                                         = 0x0dU,
 	HOSTLOGDBG                                                      = 0x0eU,
@@ -57,6 +52,7 @@ enum VU_0xCC53_CMD_ID_E {
 	MBOXMCTP                                                        = 0x11U,
 	MBOXCLIENTDBG                                                   = 0x12U,
 	INFLOGSW                                                        = 0x13U,
+	SECMBOXAER                                                      = 0x14U,
 	//For Group: Task Scheduler
 	TOP                                                             = 0x0040U,
 	//For Group: Debug
@@ -67,7 +63,7 @@ enum VU_0xCC53_CMD_ID_E {
 	MEM32                                                           = 0x0106U,
 	W4                                                              = 0x0107U,
 	CXLCNT                                                          = 0x0108U,
-	DDRECC                                                          = 0x0109U,
+	DDRTASKTEST                                                     = 0x012aU,
 	DDRGDMA                                                         = 0x010aU,
 	DDRREG                                                          = 0x010bU,
 	CXLDUMP                                                         = 0x010cU,
@@ -92,7 +88,7 @@ enum VU_0xCC53_CMD_ID_E {
 	PARITYERRINJEC                                                  = 0x0237U,
 	CXLAAESCFG                                                      = 0x0125U,
 	DDRTHROTTLE                                                     = 0x0126U,
-	DDRCHFIX                                                        = 0x0127U,
+	DDRCHBAD                                                        = 0x0127U,
 	DDRCHGRAN                                                       = 0x0128U,
 	EVTADD                                                          = 0x0129U,
 	//For Group: CPMU
@@ -108,6 +104,13 @@ enum VU_0xCC53_CMD_ID_E {
 	CHMUTHR                                                         = 0x0233U,
 	CHMUREAD                                                        = 0x0234U,
 	CHMUUNITSIZE                                                    = 0x0235U,
+	//For Group: NOR
+	NORREAD                                                         = 0x0238U,
+	NORWRITE                                                        = 0x0239U,
+	NORERASE                                                        = 0x023bU,
+	//For Group: Fw Update
+	ONLINE                                                          = 0x023aU,
+	PTSHOW                                                          = 0x023cU,
 	//For Group: TIMER
 	DATE                                                            = 0x0240U,
 };
@@ -322,68 +325,6 @@ typedef union
 
 
 
-// For VU: dlSSS
-// The VU command parameter definition, dw10~14 and cqe[0/1] definition
-typedef struct
-{
-	 u32	vuCmdId;
-	 u32	status;
-	 u32	in_sz;
-	 u32	out_sz;
-	 u32	slot;
-	 u32	arg2;
-	 u32	arg3;
-	 u32	arg4;
-} dlsss;
-// The VU input command data definition
-typedef struct 
-{
-}  __packed dlsss_input;
-// The VU output command data definition
-typedef struct 
-{
-}  __packed dlsss_output;
-// The VU command data definition
-typedef union 
-{
-	dlsss_input *input;
-	dlsss_output *output;
-}  __packed dlsss_data;
-
-
-
-
-// For VU: clrSSS
-// The VU command parameter definition, dw10~14 and cqe[0/1] definition
-typedef struct
-{
-	 u32	vuCmdId;
-	 u32	status;
-	 u32	in_sz;
-	 u32	out_sz;
-	 u32	slot;
-	 u32	arg2;
-	 u32	arg3;
-	 u32	arg4;
-} clrsss;
-// The VU input command data definition
-typedef struct 
-{
-}  __packed clrsss_input;
-// The VU output command data definition
-typedef struct 
-{
-}  __packed clrsss_output;
-// The VU command data definition
-typedef union 
-{
-	clrsss_input *input;
-	clrsss_output *output;
-}  __packed clrsss_data;
-
-
-
-
 // For VU: dlcfg
 // The VU command parameter definition, dw10~14 and cqe[0/1] definition
 typedef struct
@@ -392,10 +333,11 @@ typedef struct
 	 u32	status;
 	 u32	in_sz;
 	 u32	out_sz;
-	 u32	slot;
-	 u32	arg2;
-	 u32	arg3;
+	 u32	action;
+	 u32	cfg_type;
+	 u32	offset;
 	 u32	arg4;
+     unsigned char payload[];
 } dlcfg;
 // The VU input command data definition
 typedef struct 
@@ -411,37 +353,6 @@ typedef union
 	dlcfg_input *input;
 	dlcfg_output *output;
 }  __packed dlcfg_data;
-
-
-
-
-// For VU: cfgtest
-// The VU command parameter definition, dw10~14 and cqe[0/1] definition
-typedef struct
-{
-	 u32	vuCmdId;
-	 u32	status;
-	 u32	in_sz;
-	 u32	out_sz;
-	 u32	slot;
-	 u32	arg2;
-	 u32	arg3;
-	 u32	arg4;
-} cfgtest;
-// The VU input command data definition
-typedef struct 
-{
-}  __packed cfgtest_input;
-// The VU output command data definition
-typedef struct 
-{
-}  __packed cfgtest_output;
-// The VU command data definition
-typedef union 
-{
-	cfgtest_input *input;
-	cfgtest_output *output;
-}  __packed cfgtest_data;
 
 
 
@@ -473,68 +384,6 @@ typedef union
 	cfgfreq_input *input;
 	cfgfreq_output *output;
 }  __packed cfgfreq_data;
-
-
-
-
-// For VU: cfgtype
-// The VU command parameter definition, dw10~14 and cqe[0/1] definition
-typedef struct
-{
-	 u32	vuCmdId;
-	 u32	status;
-	 u32	in_sz;
-	 u32	out_sz;
-	 u32	slot;
-	 u32	arg2;
-	 u32	arg3;
-	 u32	arg4;
-} cfgtype;
-// The VU input command data definition
-typedef struct 
-{
-}  __packed cfgtype_input;
-// The VU output command data definition
-typedef struct 
-{
-}  __packed cfgtype_output;
-// The VU command data definition
-typedef union 
-{
-	cfgtype_input *input;
-	cfgtype_output *output;
-}  __packed cfgtype_data;
-
-
-
-
-// For VU: cfgvendor
-// The VU command parameter definition, dw10~14 and cqe[0/1] definition
-typedef struct
-{
-	 u32	vuCmdId;
-	 u32	status;
-	 u32	in_sz;
-	 u32	out_sz;
-	 u32	slot;
-	 u32	arg2;
-	 u32	arg3;
-	 u32	arg4;
-} cfgvendor;
-// The VU input command data definition
-typedef struct 
-{
-}  __packed cfgvendor_input;
-// The VU output command data definition
-typedef struct 
-{
-}  __packed cfgvendor_output;
-// The VU command data definition
-typedef union 
-{
-	cfgvendor_input *input;
-	cfgvendor_output *output;
-}  __packed cfgvendor_data;
 
 
 
@@ -783,6 +632,37 @@ typedef union
 	inflogsw_input *input;
 	inflogsw_output *output;
 }  __packed inflogsw_data;
+
+
+
+
+// For VU: secmboxaer
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} secmboxaer;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed secmboxaer_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed secmboxaer_output;
+// The VU command data definition
+typedef union 
+{
+	secmboxaer_input *input;
+	secmboxaer_output *output;
+}  __packed secmboxaer_data;
 
 
 
@@ -1051,21 +931,21 @@ typedef struct
 	 u32	arg2;
 	 u32	arg3;
 	 u32	arg4;
-} ddrecc;
+} ddrtasktest;
 // The VU input command data definition
 typedef struct 
 {
-}  __packed ddrecc_input;
+}  __packed ddrtasktest_input;
 // The VU output command data definition
 typedef struct 
 {
-}  __packed ddrecc_output;
+}  __packed ddrtasktest_output;
 // The VU command data definition
 typedef union 
 {
-	ddrecc_input *input;
-	ddrecc_output *output;
-}  __packed ddrecc_data;
+	ddrtasktest_input *input;
+	ddrtasktest_output *output;
+}  __packed ddrtasktest_data;
 
 
 
@@ -1826,21 +1706,21 @@ typedef struct
 	 u32	arg2;
 	 u32	arg3;
 	 u32	arg4;
-} ddrchfix;
+} ddrchbad;
 // The VU input command data definition
 typedef struct 
 {
-}  __packed ddrchfix_input;
+}  __packed ddrchbad_input;
 // The VU output command data definition
 typedef struct 
 {
-}  __packed ddrchfix_output;
+}  __packed ddrchbad_output;
 // The VU command data definition
 typedef union 
 {
-	ddrchfix_input *input;
-	ddrchfix_output *output;
-}  __packed ddrchfix_data;
+	ddrchbad_input *input;
+	ddrchbad_output *output;
+}  __packed ddrchbad_data;
 
 
 
@@ -2252,6 +2132,168 @@ typedef union
 
 
 
+// >>>>>   For Group: NOR
+
+// For VU: norread
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	nor_addr;
+	 u32	length;
+	 u32	arg3;
+	 u32	arg4;
+} norread;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed norread_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed norread_output;
+// The VU command data definition
+typedef union 
+{
+	norread_input *input;
+	norread_output *output;
+}  __packed norread_data;
+
+
+
+
+// For VU: norwrite
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	nor_addr;
+	 u32	length;
+	 u32	arg3;
+	 u32	arg4;
+} norwrite;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed norwrite_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed norwrite_output;
+// The VU command data definition
+typedef union 
+{
+	norwrite_input *input;
+	norwrite_output *output;
+}  __packed norwrite_data;
+
+
+
+
+// For VU: norerase
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	nor_addr;
+	 u32	length;
+	 u32	arg3;
+	 u32	arg4;
+} norerase;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed norerase_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed norerase_output;
+// The VU command data definition
+typedef union 
+{
+	norerase_input *input;
+	norerase_output *output;
+}  __packed norerase_data;
+
+
+
+
+// >>>>>   For Group: Fw Update
+
+// For VU: online
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	slot;
+	 u32	image_len;
+	 u32	arg3;
+	 u32	arg4;
+} online;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed online_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed online_output;
+// The VU command data definition
+typedef union 
+{
+	online_input *input;
+	online_output *output;
+}  __packed online_data;
+
+
+
+
+// For VU: ptshow
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	slot;
+	 u32	image_len;
+	 u32	arg3;
+	 u32	arg4;
+} ptshow;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ptshow_input;
+// The VU output command data definition
+typedef struct 
+{
+	char          pt[256];
+	char          flash_info_a[176];
+	char          flash_info_b[176];
+}  __packed ptshow_output;
+// The VU command data definition
+typedef union 
+{
+	ptshow_input *input;
+	ptshow_output *output;
+}  __packed ptshow_data;
+
+
+
+
 // >>>>>   For Group: TIMER
 
 // For VU: date
@@ -2320,20 +2362,10 @@ VU_STATUS_E vu_handler_version(vector<string> *pargs __unused, version *param __
 VU_STATUS_E vu_handler_dlbootloader(vector<string> *pargs __unused, dlbootloader *param __unused, dlbootloader_data *pdata __unused);
 // for VU: clrBootloader
 VU_STATUS_E vu_handler_clrbootloader(vector<string> *pargs __unused, clrbootloader *param __unused, clrbootloader_data *pdata __unused);
-// for VU: dlSSS
-VU_STATUS_E vu_handler_dlsss(vector<string> *pargs __unused, dlsss *param __unused, dlsss_data *pdata __unused);
-// for VU: clrSSS
-VU_STATUS_E vu_handler_clrsss(vector<string> *pargs __unused, clrsss *param __unused, clrsss_data *pdata __unused);
 // for VU: dlcfg
 VU_STATUS_E vu_handler_dlcfg(vector<string> *pargs __unused, dlcfg *param __unused, dlcfg_data *pdata __unused);
-// for VU: cfgtest
-VU_STATUS_E vu_handler_cfgtest(vector<string> *pargs __unused, cfgtest *param __unused, cfgtest_data *pdata __unused);
 // for VU: cfgfreq
 VU_STATUS_E vu_handler_cfgfreq(vector<string> *pargs __unused, cfgfreq *param __unused, cfgfreq_data *pdata __unused);
-// for VU: cfgtype
-VU_STATUS_E vu_handler_cfgtype(vector<string> *pargs __unused, cfgtype *param __unused, cfgtype_data *pdata __unused);
-// for VU: cfgvendor
-VU_STATUS_E vu_handler_cfgvendor(vector<string> *pargs __unused, cfgvendor *param __unused, cfgvendor_data *pdata __unused);
 // for VU: showcfginfo
 VU_STATUS_E vu_handler_showcfginfo(vector<string> *pargs __unused, showcfginfo *param __unused, showcfginfo_data *pdata __unused);
 // for VU: ddrinfo
@@ -2350,6 +2382,8 @@ VU_STATUS_E vu_handler_mboxmctp(vector<string> *pargs __unused, mboxmctp *param 
 VU_STATUS_E vu_handler_mboxclientdbg(vector<string> *pargs __unused, mboxclientdbg *param __unused, mboxclientdbg_data *pdata __unused);
 // for VU: infLogSw
 VU_STATUS_E vu_handler_inflogsw(vector<string> *pargs __unused, inflogsw *param __unused, inflogsw_data *pdata __unused);
+// for VU: secmboxaer
+VU_STATUS_E vu_handler_secmboxaer(vector<string> *pargs __unused, secmboxaer *param __unused, secmboxaer_data *pdata __unused);
 
 // >>>>>   For Group: Task Scheduler
 // for VU: top
@@ -2370,8 +2404,8 @@ VU_STATUS_E vu_handler_mem32(vector<string> *pargs __unused, mem32 *param __unus
 VU_STATUS_E vu_handler_w4(vector<string> *pargs __unused, w4 *param __unused, w4_data *pdata __unused);
 // for VU: cxlcnt
 VU_STATUS_E vu_handler_cxlcnt(vector<string> *pargs __unused, cxlcnt *param __unused, cxlcnt_data *pdata __unused);
-// for VU: ddrecc
-VU_STATUS_E vu_handler_ddrecc(vector<string> *pargs __unused, ddrecc *param __unused, ddrecc_data *pdata __unused);
+// for VU: ddrtasktest
+VU_STATUS_E vu_handler_ddrtasktest(vector<string> *pargs __unused, ddrtasktest *param __unused, ddrtasktest_data *pdata __unused);
 // for VU: ddrgdma
 VU_STATUS_E vu_handler_ddrgdma(vector<string> *pargs __unused, ddrgdma *param __unused, ddrgdma_data *pdata __unused);
 // for VU: ddrreg
@@ -2420,8 +2454,8 @@ VU_STATUS_E vu_handler_parityerrinjec(vector<string> *pargs __unused, parityerri
 VU_STATUS_E vu_handler_cxlaaescfg(vector<string> *pargs __unused, cxlaaescfg *param __unused, cxlaaescfg_data *pdata __unused);
 // for VU: ddrthrottle
 VU_STATUS_E vu_handler_ddrthrottle(vector<string> *pargs __unused, ddrthrottle *param __unused, ddrthrottle_data *pdata __unused);
-// for VU: ddrchfix
-VU_STATUS_E vu_handler_ddrchfix(vector<string> *pargs __unused, ddrchfix *param __unused, ddrchfix_data *pdata __unused);
+// for VU: ddrchbad
+VU_STATUS_E vu_handler_ddrchbad(vector<string> *pargs __unused, ddrchbad *param __unused, ddrchbad_data *pdata __unused);
 // for VU: ddrchgran
 VU_STATUS_E vu_handler_ddrchgran(vector<string> *pargs __unused, ddrchgran *param __unused, ddrchgran_data *pdata __unused);
 // for VU: evtadd
@@ -2452,6 +2486,20 @@ VU_STATUS_E vu_handler_chmuthr(vector<string> *pargs __unused, chmuthr *param __
 VU_STATUS_E vu_handler_chmuread(vector<string> *pargs __unused, chmuread *param __unused, chmuread_data *pdata __unused);
 // for VU: chmuunitsize
 VU_STATUS_E vu_handler_chmuunitsize(vector<string> *pargs __unused, chmuunitsize *param __unused, chmuunitsize_data *pdata __unused);
+
+// >>>>>   For Group: NOR
+// for VU: norread
+VU_STATUS_E vu_handler_norread(vector<string> *pargs __unused, norread *param __unused, norread_data *pdata __unused);
+// for VU: norwrite
+VU_STATUS_E vu_handler_norwrite(vector<string> *pargs __unused, norwrite *param __unused, norwrite_data *pdata __unused);
+// for VU: norerase
+VU_STATUS_E vu_handler_norerase(vector<string> *pargs __unused, norerase *param __unused, norerase_data *pdata __unused);
+
+// >>>>>   For Group: Fw Update
+// for VU: online
+VU_STATUS_E vu_handler_online(vector<string> *pargs __unused, online *param __unused, online_data *pdata __unused);
+// for VU: ptshow
+VU_STATUS_E vu_handler_ptshow(vector<string> *pargs __unused, ptshow *param __unused, ptshow_data *pdata __unused);
 
 // >>>>>   For Group: TIMER
 // for VU: date
