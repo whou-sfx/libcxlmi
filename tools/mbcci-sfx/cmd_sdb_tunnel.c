@@ -26,6 +26,9 @@
  *   get-health-info   Get Health Info (opcode 0x4200)
  *   get-alert-config  Get Alert Configuration (opcode 0x4201)
  *   set-alert-config  Set Alert Configuration (opcode 0x4202)
+ *   get-poison-list   Get Poison List (opcode 0x4300)
+ *   inject-poison     Inject Poison (opcode 0x4301)
+ *   clear-poison      Clear Poison (opcode 0x4302)
  *   get-sld-qos-ctrl  Get SLD QoS Control (opcode 0x4700)
  *   set-sld-qos-ctrl  Set SLD QoS Control (opcode 0x4701)
  *   get-sld-qos-status Get SLD QoS Status (opcode 0x4702)
@@ -2632,6 +2635,354 @@ static int sdb_tunnel_set_timestamp(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel poison commands (inner opcodes 0x4300-0x4302)          */
+/* ------------------------------------------------------------------ */
+
+/* Match mailbox poison sizing: header + records fit in 2048B. */
+#define SDB_POISON_LIST_RSP_HDR_SZ 0x20
+#define SDB_POISON_MAX_RECORDS \
+	((CXL_MAILBOX_MAX_PAYLOAD_SIZE - SDB_POISON_LIST_RSP_HDR_SZ) / \
+	 sizeof(struct cxlmi_memdev_media_err_record))
+#define SDB_POISON_MAX_ITERATIONS 64
+#define SDB_POISON_REQ_RESTART_BIT (1ULL << 0)
+#define SDB_POISON_RSP_FLAG_MORE   (1U << 0)
+
+static int sdb_split_poison_args(int argc, char **argv, uint8_t *port_id,
+				 char **poison_argv, int *poison_argc)
+{
+	int rc;
+	int i;
+
+	*port_id = 0;
+	*poison_argc = 0;
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			*port_id = (uint8_t)rc;
+		} else {
+			poison_argv[(*poison_argc)++] = argv[i];
+		}
+	}
+
+	return 0;
+}
+
+static uint32_t sdb_payload_length(const struct cxlmi_cci_msg *msg)
+{
+	return msg->pl_length[0] |
+	       ((uint32_t)msg->pl_length[1] << 8) |
+	       ((uint32_t)(msg->pl_length[2] & 0x0f) << 16);
+}
+
+static int sdb_tunnel_get_poison_list(struct cxlmi_endpoint *ep,
+				      int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg msg;
+		struct cxlmi_cmd_memdev_get_poison_list_req payload;
+	} __attribute__((packed)) req;
+	struct cxlmi_cmd_memdev_get_poison_list_req params;
+	struct cxlmi_cmd_memdev_get_poison_list_rsp *wire_rsp;
+	struct cxlmi_cmd_memdev_get_poison_list_rsp *host_rsp;
+	struct cxlmi_cci_msg *inner_rsp;
+	char **poison_argv;
+	uint8_t *rsp_buf;
+	size_t rsp_payload_sz;
+	size_t rsp_buf_sz;
+	uint64_t base_dpa;
+	uint64_t length;
+	uint32_t payload_len;
+	uint16_t record_count;
+	uint8_t port_id;
+	int frestart = 0;
+	int poison_argc;
+	int iter;
+	int rc;
+	int i;
+
+	poison_argv = calloc(argc ? (size_t)argc : 1, sizeof(*poison_argv));
+	if (!poison_argv) {
+		perror("sdb-tunnel get-poison-list: calloc");
+		return -1;
+	}
+	rc = sdb_split_poison_args(argc, argv, &port_id, poison_argv,
+				   &poison_argc);
+	if (rc)
+		goto out_argv;
+	rc = parse_get_poison_list_req(poison_argc, poison_argv, &params,
+				       &frestart);
+	if (rc)
+		goto out_argv;
+
+	base_dpa = params.get_poison_list_phy_addr & ~SDB_POISON_REQ_RESTART_BIT;
+	length = params.get_poison_list_phy_addr_len;
+
+	rsp_payload_sz = sizeof(*host_rsp) +
+		SDB_POISON_MAX_RECORDS *
+			sizeof(struct cxlmi_memdev_media_err_record);
+	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		     sizeof(struct cxlmi_cci_msg) + rsp_payload_sz;
+	rsp_buf = calloc(1, rsp_buf_sz);
+	host_rsp = calloc(1, rsp_payload_sz);
+	if (!rsp_buf || !host_rsp) {
+		perror("sdb-tunnel get-poison-list: calloc");
+		free(rsp_buf);
+		free(host_rsp);
+		rc = -1;
+		goto out_argv;
+	}
+
+	for (iter = 0; iter < SDB_POISON_MAX_ITERATIONS; iter++) {
+		uint64_t req_dpa = base_dpa;
+
+		if (iter == 0 && frestart)
+			req_dpa |= SDB_POISON_REQ_RESTART_BIT;
+
+		memset(&req, 0, sizeof(req));
+		memset(rsp_buf, 0, rsp_buf_sz);
+		memset(host_rsp, 0, rsp_payload_sz);
+
+		req.hdr.id = port_id;
+		req.hdr.target_type = 0;
+		req.hdr.command_size =
+			(uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+		req.msg.command = 0x00;     /* GET_POISON_LIST */
+		req.msg.command_set = 0x43; /* MEDIA_AND_POISON */
+		req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+		req.msg.pl_length[1] =
+			(uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+		req.payload.get_poison_list_phy_addr = cpu_to_le64(req_dpa);
+		req.payload.get_poison_list_phy_addr_len = cpu_to_le64(length);
+
+		if (iter > 0)
+			printf("--- poison list continuation %d ---\n", iter);
+
+		dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+		rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+					       &req, sizeof(req),
+					       rsp_buf, rsp_buf_sz);
+		if (rc) {
+			if (rc > 0)
+				fprintf(stderr,
+					"sdb-tunnel get-poison-list failed: %s\n",
+					cxlmi_cmd_retcode_tostr(rc));
+			else
+				fprintf(stderr,
+					"sdb-tunnel get-poison-list ioctl failed\n");
+			goto out_rsp;
+		}
+
+		dump_hex("sdb-tunnel RX", rsp_buf, rsp_buf_sz);
+		inner_rsp = (struct cxlmi_cci_msg *)
+			(rsp_buf + sizeof(struct sdb_tunnel_rsp_hdr));
+		if (inner_rsp->return_code != 0) {
+			fprintf(stderr,
+				"sdb-tunnel get-poison-list: inner CCI error 0x%04x\n",
+				inner_rsp->return_code);
+			rc = (int)inner_rsp->return_code;
+			goto out_rsp;
+		}
+
+		payload_len = sdb_payload_length(inner_rsp);
+		if (payload_len < sizeof(*wire_rsp) ||
+		    payload_len > rsp_payload_sz) {
+			fprintf(stderr,
+				"sdb-tunnel get-poison-list: invalid response payload length %u\n",
+				payload_len);
+			rc = -1;
+			goto out_rsp;
+		}
+
+		wire_rsp = (struct cxlmi_cmd_memdev_get_poison_list_rsp *)
+			inner_rsp->payload;
+		host_rsp->poison_list_flags = wire_rsp->poison_list_flags;
+		host_rsp->overflow_timestamp =
+			le64_to_cpu(wire_rsp->overflow_timestamp);
+		record_count = le16_to_cpu(wire_rsp->more_err_media_record_cnt);
+		if (record_count > (payload_len - sizeof(*wire_rsp)) /
+				   sizeof(struct cxlmi_memdev_media_err_record))
+			record_count = (uint16_t)
+				((payload_len - sizeof(*wire_rsp)) /
+				 sizeof(struct cxlmi_memdev_media_err_record));
+		if (record_count > SDB_POISON_MAX_RECORDS)
+			record_count = SDB_POISON_MAX_RECORDS;
+		host_rsp->more_err_media_record_cnt = record_count;
+		for (i = 0; i < record_count; i++) {
+			host_rsp->records[i].media_err_addr =
+				le64_to_cpu(wire_rsp->records[i].media_err_addr);
+			host_rsp->records[i].media_err_len =
+				le32_to_cpu(wire_rsp->records[i].media_err_len);
+		}
+
+		print_poison_list(host_rsp);
+		if (!(host_rsp->poison_list_flags & SDB_POISON_RSP_FLAG_MORE)) {
+			rc = 0;
+			goto out_rsp;
+		}
+	}
+
+	fprintf(stderr,
+		"sdb-tunnel get-poison-list: reached max iterations (%d) with MORE still set\n",
+		SDB_POISON_MAX_ITERATIONS);
+	rc = -1;
+
+out_rsp:
+	free(rsp_buf);
+	free(host_rsp);
+out_argv:
+	free(poison_argv);
+	return rc;
+}
+
+static int sdb_tunnel_inject_poison(struct cxlmi_endpoint *ep,
+				    int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg msg;
+		struct cxlmi_cmd_memdev_inject_poison_req payload;
+	} __attribute__((packed)) req;
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg msg;
+	} __attribute__((packed)) rsp;
+	struct cxlmi_cmd_memdev_inject_poison_req params;
+	char **poison_argv;
+	uint8_t port_id;
+	int poison_argc;
+	int rc;
+
+	poison_argv = calloc(argc ? (size_t)argc : 1, sizeof(*poison_argv));
+	if (!poison_argv) {
+		perror("sdb-tunnel inject-poison: calloc");
+		return -1;
+	}
+	rc = sdb_split_poison_args(argc, argv, &port_id, poison_argv,
+				   &poison_argc);
+	if (rc)
+		goto out;
+	rc = parse_inject_poison_req(poison_argc, poison_argv, &params);
+	if (rc)
+		goto out;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id = port_id;
+	req.hdr.target_type = 0;
+	req.hdr.command_size =
+		(uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+	req.msg.command = 0x01;     /* INJECT_POISON */
+	req.msg.command_set = 0x43; /* MEDIA_AND_POISON */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] =
+		(uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+	req.payload.inject_poison_phy_addr =
+		cpu_to_le64(params.inject_poison_phy_addr);
+
+	memset(&rsp, 0, sizeof(rsp));
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req), &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel inject-poison failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel inject-poison ioctl failed\n");
+		goto out;
+	}
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel inject-poison: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		rc = (int)rsp.msg.return_code;
+		goto out;
+	}
+
+	printf("Inject poison OK\n");
+out:
+	free(poison_argv);
+	return rc;
+}
+
+static int sdb_tunnel_clear_poison(struct cxlmi_endpoint *ep,
+				   int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg msg;
+		struct cxlmi_cmd_memdev_clear_poison_req payload;
+	} __attribute__((packed)) req;
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg msg;
+	} __attribute__((packed)) rsp;
+	struct cxlmi_cmd_memdev_clear_poison_req params;
+	char **poison_argv;
+	uint8_t port_id;
+	int poison_argc;
+	int rc;
+
+	poison_argv = calloc(argc ? (size_t)argc : 1, sizeof(*poison_argv));
+	if (!poison_argv) {
+		perror("sdb-tunnel clear-poison: calloc");
+		return -1;
+	}
+	rc = sdb_split_poison_args(argc, argv, &port_id, poison_argv,
+				   &poison_argc);
+	if (rc)
+		goto out;
+	rc = parse_clear_poison_req(poison_argc, poison_argv, &params);
+	if (rc)
+		goto out;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id = port_id;
+	req.hdr.target_type = 0;
+	req.hdr.command_size =
+		(uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+	req.msg.command = 0x02;     /* CLEAR_POISON */
+	req.msg.command_set = 0x43; /* MEDIA_AND_POISON */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] =
+		(uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+	req.payload.clear_poison_phy_addr =
+		cpu_to_le64(params.clear_poison_phy_addr);
+	memcpy(req.payload.clear_poison_write_data,
+	       params.clear_poison_write_data,
+	       sizeof(req.payload.clear_poison_write_data));
+
+	memset(&rsp, 0, sizeof(rsp));
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req), &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel clear-poison failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel clear-poison ioctl failed\n");
+		goto out;
+	}
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel clear-poison: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		rc = (int)rsp.msg.return_code;
+		goto out;
+	}
+
+	printf("Clear poison OK\n");
+out:
+	free(poison_argv);
+	return rc;
+}
+
+/* ------------------------------------------------------------------ */
 /* sdb-tunnel fm-get-ld-info (inner opcode 0x5400)                  */
 /* ------------------------------------------------------------------ */
 
@@ -4970,6 +5321,11 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  get-alert-config   [--port <vdm0|vdm1|i3c>]                        Get Alert Configuration (0x4201)\n"
 			"  set-alert-config   [--port <vdm0|vdm1|i3c>] [--life-used-warning <pct>] [--over-temp-warning <n>] ...\n"
 			"                                                                         Set Alert Configuration (0x4202)\n"
+			"  get-poison-list   [--port <vdm0|vdm1|i3c>] --dpa <addr> --length <bytes> [--frestart]\n"
+			"                                                                         Get Poison List (0x4300)\n"
+			"  inject-poison     [--port <vdm0|vdm1|i3c>] --dpa <addr>             Inject Poison (0x4301)\n"
+			"  clear-poison      [--port <vdm0|vdm1|i3c>] --dpa <addr> [--write-data <128-hex-digits>]\n"
+			"                                                                         Clear Poison (0x4302)\n"
 			"  get-sld-qos-ctrl   [--port <vdm0|vdm1|i3c>]                        Get SLD QoS Control (0x4700)\n"
 			"  set-sld-qos-ctrl   [--port <vdm0|vdm1|i3c>] [--egress-congestion-control-enable <0|1>] [--egress-tpr-enable <0|1>] ...\n"
 			"                                                                         Set SLD QoS Control (0x4701)\n"
@@ -5044,6 +5400,12 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_get_alert_config(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "set-alert-config") == 0)
 		return sdb_tunnel_set_alert_config(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-poison-list") == 0)
+		return sdb_tunnel_get_poison_list(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "inject-poison") == 0)
+		return sdb_tunnel_inject_poison(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "clear-poison") == 0)
+		return sdb_tunnel_clear_poison(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-sld-qos-ctrl") == 0)
 		return sdb_tunnel_get_sld_qos_ctrl(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "set-sld-qos-ctrl") == 0)
@@ -5109,7 +5471,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, fm-set-ld-alloc, fm-get-qos-ctrl, fm-set-qos-ctrl, fm-get-qos-status, fm-get-qos-alloc-bw, fm-set-qos-alloc-bw, fm-get-qos-bw-limit, fm-set-qos-bw-limit, get-supported-logs, get-supported-feat, get-feature, set-feature, get-log, get-log-cap, clear-log, populate-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-poison-list, inject-poison, clear-poison, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, fm-set-ld-alloc, fm-get-qos-ctrl, fm-set-qos-ctrl, fm-get-qos-status, fm-get-qos-alloc-bw, fm-set-qos-alloc-bw, fm-get-qos-bw-limit, fm-set-qos-bw-limit, get-supported-logs, get-supported-feat, get-feature, set-feature, get-log, get-log-cap, clear-log, populate-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");

@@ -10,6 +10,7 @@ executable(
         'cmd_partition.c',
         'cmd_fw.c',
         'cmd_health.c',
+        'cmd_poison.c',
         'cmd_qos.c',
         'cmd_fm.c',
         'cmd_fm_qos.c',

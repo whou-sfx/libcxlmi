@@ -93,6 +93,22 @@ int cmd_clear_event_records(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_set_event_interrupt_policy(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+int parse_get_poison_list_req(
+	int argc, char **argv,
+	struct cxlmi_cmd_memdev_get_poison_list_req *req,
+	int *frestart);
+int parse_inject_poison_req(
+	int argc, char **argv,
+	struct cxlmi_cmd_memdev_inject_poison_req *req);
+int parse_clear_poison_req(
+	int argc, char **argv,
+	struct cxlmi_cmd_memdev_clear_poison_req *req);
+void print_poison_list(
+	const struct cxlmi_cmd_memdev_get_poison_list_rsp *rsp);
+int cmd_get_poison_list(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_inject_poison(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_clear_poison(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_vu_evtadd(struct cxlmi_endpoint *ep, int argc, char **argv);
 
 struct vu_dlcfg_params {

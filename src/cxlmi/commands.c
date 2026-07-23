@@ -14,10 +14,12 @@
 
 #define CXL_CAPACITY_MULTIPLIER   (256 * 1024 * 1024)
 
-/* Max poison records to retrieve - based on typical mailbox sizes */
-#define MAX_POISON_RECORDS 256
 /* CXL r3.1 Get Poison List output payload fixed header (no records). */
 #define POISON_LIST_RSP_HDR_SZ 0x20
+/* Fit header + records into CXL_MAILBOX_MAX_PAYLOAD_SIZE (2048). */
+#define MAX_POISON_RECORDS \
+	((CXL_MAILBOX_MAX_PAYLOAD_SIZE - POISON_LIST_RSP_HDR_SZ) / \
+	 sizeof(struct cxlmi_memdev_media_err_record))
 
 /* Max scan media error records - same as poison records */
 #define MAX_SCAN_MEDIA_RECORDS 256
