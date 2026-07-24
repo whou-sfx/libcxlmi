@@ -5610,6 +5610,292 @@ static int sdb_tunnel_populate_log(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel perform-maintenance (inner opcode 0x0600)               */
+/* ------------------------------------------------------------------ */
+
+#define SDB_PM_INNER_CMD_SET 0x06
+#define SDB_PM_INNER_CMD     0x00
+
+static int sdb_tunnel_pm_ppr(struct cxlmi_endpoint *ep, uint8_t port_id,
+			     int argc, char **argv)
+{
+	struct pm_ppr_args args;
+	struct {
+		struct cxlmi_cmd_perform_maintenance_req hdr;
+		struct cxlmi_perform_maintenance_ppr_params ppr;
+	} __attribute__((packed)) inner_pl;
+	size_t pl_sz = sizeof(inner_pl);
+	size_t req_sz = sizeof(struct sdb_tunnel_req_hdr) +
+			sizeof(struct cxlmi_cci_msg) + pl_sz;
+	size_t rsp_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+			sizeof(struct cxlmi_cci_msg);
+	uint8_t *req_buf = NULL;
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+	struct sdb_tunnel_req_hdr *req_hdr;
+	struct cxlmi_cci_msg      *req_msg;
+	uint8_t *req_pl;
+	int rc;
+
+	rc = parse_pm_ppr_args(argc, argv, &args);
+	if (rc)
+		return rc;
+
+	req_buf = calloc(1, req_sz);
+	if (!req_buf) {
+		fprintf(stderr, "sdb-tunnel perform-maintenance ppr: out of memory\n");
+		return -1;
+	}
+
+	req_hdr = (struct sdb_tunnel_req_hdr *)req_buf;
+	req_msg = (struct cxlmi_cci_msg *)(req_buf + sizeof(*req_hdr));
+	req_pl  = req_buf + sizeof(*req_hdr) + sizeof(*req_msg);
+
+	req_hdr->id           = port_id;
+	req_hdr->target_type  = 0;
+	req_hdr->command_size = (uint16_t)(sizeof(*req_msg) + pl_sz);
+
+	req_msg->command_set  = SDB_PM_INNER_CMD_SET;
+	req_msg->command      = SDB_PM_INNER_CMD;
+	req_msg->pl_length[0] = (uint8_t)(pl_sz & 0xff);
+	req_msg->pl_length[1] = (uint8_t)((pl_sz >> 8) & 0xff);
+
+	memset(&inner_pl, 0, sizeof(inner_pl));
+	inner_pl.hdr.maint_op_class    = 0x01; /* PPR */
+	inner_pl.hdr.maint_op_subclass = args.subclass;
+	inner_pl.ppr.flags             = args.flags;
+	inner_pl.ppr.dpa               = args.dpa;
+	memcpy(inner_pl.ppr.nibble_mask, args.nibble_mask, 3);
+	memcpy(req_pl, &inner_pl, pl_sz);
+
+	memset(&rsp, 0, sizeof(rsp));
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", req_buf, req_sz);
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       req_buf, req_sz,
+				       &rsp, rsp_sz);
+	free(req_buf);
+
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr,
+				"sdb-tunnel perform-maintenance ppr failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel perform-maintenance ppr ioctl failed\n");
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0 && rsp.msg.return_code != 0x0001) {
+		fprintf(stderr,
+			"sdb-tunnel perform-maintenance ppr: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	if (rsp.msg.return_code == 0x0001)
+		printf("Perform Maintenance (PPR) started as background operation\n");
+	else
+		printf("Perform Maintenance (PPR) OK\n");
+
+	printf("  Type:        %s\n",
+	       args.subclass == 0 ? "sPPR (Soft PPR)" : "hPPR (Hard PPR)");
+	printf("  Query-only:  %s\n", (args.flags & 0x01) ? "yes" : "no");
+	printf("  DPA:         0x%016llx\n", (unsigned long long)args.dpa);
+	printf("  Nibble Mask: %02x%02x%02x\n",
+	       args.nibble_mask[0], args.nibble_mask[1], args.nibble_mask[2]);
+	return 0;
+}
+
+static int sdb_tunnel_pm_mbist(struct cxlmi_endpoint *ep, uint8_t port_id,
+			       int argc, char **argv)
+{
+	struct pm_mbist_args args;
+	struct cxlmi_cmd_perform_maintenance_req *inner_hdr;
+	struct cxlmi_perform_maintenance_mbist_params *mbist_hdr;
+	struct cxlmi_media_test_common_config *cfg;
+	struct cxlmi_media_test_params_entry *entries;
+	size_t pl_sz, req_sz, rsp_sz;
+	uint8_t *req_buf = NULL;
+	uint8_t *rsp_buf = NULL;
+	struct sdb_tunnel_req_hdr *req_hdr;
+	struct cxlmi_cci_msg      *req_msg;
+	uint8_t *req_pl;
+	struct cxlmi_cci_msg *inner_rsp;
+	uint8_t t;
+	int rc;
+
+	rc = parse_pm_mbist_args(argc, argv, &args);
+	if (rc)
+		return rc;
+
+	/*
+	 * inner payload:
+	 *   cxlmi_cmd_perform_maintenance_req header (2B: class+subclass)
+	 *   cxlmi_perform_maintenance_mbist_params   (6B: action+offset+rsvd)
+	 *   cxlmi_media_test_common_config           (32B)
+	 *   N * cxlmi_media_test_params_entry        (N * 32B)
+	 */
+	pl_sz = sizeof(*inner_hdr) +
+		sizeof(*mbist_hdr) +
+		sizeof(*cfg) +
+		args.num_tests * sizeof(*entries);
+
+	req_sz = sizeof(struct sdb_tunnel_req_hdr) +
+		 sizeof(struct cxlmi_cci_msg) + pl_sz;
+	rsp_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		 sizeof(struct cxlmi_cci_msg);
+
+	req_buf = calloc(1, req_sz);
+	if (!req_buf) {
+		fprintf(stderr, "sdb-tunnel perform-maintenance mbist: out of memory\n");
+		return -1;
+	}
+	rsp_buf = calloc(1, rsp_sz);
+	if (!rsp_buf) {
+		fprintf(stderr, "sdb-tunnel perform-maintenance mbist: out of memory\n");
+		free(req_buf);
+		return -1;
+	}
+
+	req_hdr = (struct sdb_tunnel_req_hdr *)req_buf;
+	req_msg = (struct cxlmi_cci_msg *)(req_buf + sizeof(*req_hdr));
+	req_pl  = req_buf + sizeof(*req_hdr) + sizeof(*req_msg);
+
+	req_hdr->id           = port_id;
+	req_hdr->target_type  = 0;
+	req_hdr->command_size = (uint16_t)(sizeof(*req_msg) + pl_sz);
+
+	req_msg->command_set  = SDB_PM_INNER_CMD_SET;
+	req_msg->command      = SDB_PM_INNER_CMD;
+	req_msg->pl_length[0] = (uint8_t)(pl_sz & 0xff);
+	req_msg->pl_length[1] = (uint8_t)((pl_sz >> 8) & 0xff);
+
+	inner_hdr = (struct cxlmi_cmd_perform_maintenance_req *)req_pl;
+	inner_hdr->maint_op_class    = 0x03; /* Built-in Test */
+	inner_hdr->maint_op_subclass = 0x00; /* Media Test */
+
+	mbist_hdr = (struct cxlmi_perform_maintenance_mbist_params *)inner_hdr->params;
+	mbist_hdr->action = args.action;
+	mbist_hdr->offset = args.offset;
+
+	cfg = (struct cxlmi_media_test_common_config *)mbist_hdr->test_params;
+	cfg->num_tests                = args.num_tests;
+	cfg->start_address            = args.start_address;
+	cfg->length                   = args.length;
+	cfg->media_test_results_config = args.results_config;
+	cfg->config_flags             = args.config_flags;
+
+	entries = (struct cxlmi_media_test_params_entry *)(cfg + 1);
+	for (t = 0; t < args.num_tests; t++) {
+		entries[t].test_id               = args.tests[t].test_id;
+		entries[t].num_iterations        = args.tests[t].num_iterations;
+		entries[t].flags                 = args.tests[t].flags;
+		entries[t].pattern_type          = args.tests[t].pattern_type;
+		entries[t].pattern_value         = args.tests[t].pattern_value;
+		entries[t].prbs_seed             = args.tests[t].prbs_seed;
+		entries[t].error_count_threshold = args.tests[t].error_count_threshold;
+	}
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", req_buf, req_sz);
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       req_buf, req_sz,
+				       rsp_buf, rsp_sz);
+	free(req_buf);
+
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr,
+				"sdb-tunnel perform-maintenance mbist failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel perform-maintenance mbist ioctl failed\n");
+		free(rsp_buf);
+		return rc;
+	}
+
+	dump_hex("sdb-tunnel RX", rsp_buf, rsp_sz);
+
+	inner_rsp = (struct cxlmi_cci_msg *)(rsp_buf + sizeof(struct sdb_tunnel_rsp_hdr));
+	rc = (int)inner_rsp->return_code;
+	free(rsp_buf);
+
+	if (rc != 0 && rc != 0x0001) {
+		fprintf(stderr,
+			"sdb-tunnel perform-maintenance mbist: inner CCI error 0x%04x\n",
+			rc);
+		return rc;
+	}
+
+	if (rc == 0x0001)
+		printf("Perform Maintenance (MBIST) started as background operation\n");
+	else
+		printf("Perform Maintenance (MBIST) OK\n");
+
+	printf("  Action:        %u\n", args.action);
+	printf("  Start Address: 0x%016llx\n",
+	       (unsigned long long)args.start_address);
+	printf("  Length:        0x%016llx (64B units)\n",
+	       (unsigned long long)args.length);
+	printf("  Num Tests:     %u\n", args.num_tests);
+	for (t = 0; t < args.num_tests; t++)
+		printf("  [%u] test_id=0x%04x iterations=%u flags=0x%04x\n",
+		       t, args.tests[t].test_id,
+		       args.tests[t].num_iterations,
+		       args.tests[t].flags);
+
+	return 0;
+}
+
+static int sdb_tunnel_perform_maintenance(struct cxlmi_endpoint *ep,
+					  int argc, char **argv)
+{
+	char *pm_argv[32];
+	int pm_argc = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			if (pm_argc >= (int)(sizeof(pm_argv) / sizeof(pm_argv[0]))) {
+				fprintf(stderr,
+					"sdb-tunnel perform-maintenance: too many arguments\n");
+				return -1;
+			}
+			pm_argv[pm_argc++] = argv[i];
+		}
+	}
+
+	if (pm_argc < 1) {
+		fprintf(stderr,
+			"Usage: sdb-tunnel perform-maintenance ppr|mbist [args...] [--port <vdm0|vdm1|i3c>]\n");
+		return -1;
+	}
+
+	if (strcmp(pm_argv[0], "ppr") == 0)
+		return sdb_tunnel_pm_ppr(ep, port_id, pm_argc - 1, pm_argv + 1);
+	if (strcmp(pm_argv[0], "mbist") == 0)
+		return sdb_tunnel_pm_mbist(ep, port_id, pm_argc - 1, pm_argv + 1);
+
+	fprintf(stderr,
+		"sdb-tunnel perform-maintenance: unknown action '%s' (expected ppr|mbist)\n",
+		pm_argv[0]);
+	return -1;
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -5798,12 +6084,15 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_get_timestamp(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "set-timestamp") == 0)
 		return sdb_tunnel_set_timestamp(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "perform-maintenance") == 0)
+		return sdb_tunnel_perform_maintenance(ep, argc - 2, argv + 2);
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
 		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-poison-list, inject-poison, clear-poison, get-scan-media-cap, scan-media, get-scan-media-results, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, fm-set-ld-alloc, fm-get-qos-ctrl, fm-set-qos-ctrl, fm-get-qos-status, fm-get-qos-alloc-bw, fm-set-qos-alloc-bw, fm-get-qos-bw-limit, fm-set-qos-bw-limit, get-supported-logs, get-supported-feat, get-feature, set-feature, get-log, get-log-cap, clear-log, populate-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
-		" get-timestamp, set-timestamp\n");
+		" get-timestamp, set-timestamp,"
+		" perform-maintenance\n");
 	return -1;
 }

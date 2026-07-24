@@ -13,6 +13,7 @@ executable(
         'cmd_poison.c',
         'cmd_scan_media.c',
         'cmd_media_operations.c',
+        'cmd_perform_maintenance.c',
         'cmd_qos.c',
         'cmd_fm.c',
         'cmd_fm_qos.c',

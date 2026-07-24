@@ -124,6 +124,40 @@ int cmd_get_scan_media_results(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 int cmd_media_operation(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+/* Perform Maintenance (0600h) shared structures and helpers */
+struct pm_ppr_args {
+	uint8_t  subclass;	/* 0=sPPR, 1=hPPR */
+	uint8_t  flags;		/* Bit0: query-resources */
+	uint64_t dpa;
+	uint8_t  nibble_mask[3];
+};
+
+#define PM_MBIST_MAX_TESTS 8
+struct pm_mbist_test_entry {
+	uint16_t test_id;
+	uint8_t  num_iterations;
+	uint16_t flags;
+	uint16_t pattern_type;
+	uint8_t  pattern_value;
+	uint32_t prbs_seed;
+	uint16_t error_count_threshold;
+};
+
+struct pm_mbist_args {
+	uint8_t  action;
+	uint32_t offset;
+	uint64_t start_address;
+	uint64_t length;
+	uint8_t  results_config;
+	uint8_t  config_flags;
+	uint8_t  num_tests;
+	struct pm_mbist_test_entry tests[PM_MBIST_MAX_TESTS];
+};
+
+int parse_pm_ppr_args(int argc, char **argv, struct pm_ppr_args *out);
+int parse_pm_mbist_args(int argc, char **argv, struct pm_mbist_args *out);
+int cmd_perform_maintenance(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_vu_evtadd(struct cxlmi_endpoint *ep, int argc, char **argv);
 
 struct vu_dlcfg_params {

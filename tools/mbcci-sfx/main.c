@@ -44,6 +44,8 @@ static const struct subcmd subcmds[] = {
 	  "Get Scan Media Results (4305h)" },
 	{ "media-operation",           cmd_media_operation,
 	  "Media Operations (4402h) discovery|sanitize [args...]" },
+	{ "perform-maintenance",       cmd_perform_maintenance,
+	  "Perform Maintenance (0600h) ppr|mbist [args...]" },
 	{ "get-sld-qos-ctrl",          cmd_get_sld_qos_ctrl,
 	  "Get SLD QoS Control (4700h)" },
 	{ "set-sld-qos-ctrl",          cmd_set_sld_qos_ctrl,
@@ -91,7 +93,7 @@ static const struct subcmd subcmds[] = {
 	{ "set-timestamp",             cmd_set_timestamp,
 	  "Set device timestamp (0301h) [--ts <ns>] (default: current host time)" },
 	{ "sdb-tunnel",                cmd_sdb_tunnel,
-	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|vu-dlcfg|vu-getdevcfg|vu-ddrfreq|vu-pciespeed|activate-fw|get-health-info|get-alert-config|set-alert-config|get-poison-list|inject-poison|clear-poison|get-scan-media-cap|scan-media|get-scan-media-results|get-sld-qos-ctrl|set-sld-qos-ctrl|get-sld-qos-status|fm-get-ld-info|fm-get-ld-alloc|fm-set-ld-alloc|fm-get-qos-ctrl|fm-set-qos-ctrl|fm-get-qos-status|fm-get-qos-alloc-bw|fm-set-qos-alloc-bw|fm-get-qos-bw-limit|fm-set-qos-bw-limit|get-supported-logs|get-supported-feat|get-feature|set-feature|get-log|get-log-cap|clear-log|populate-log|bg-op-status|get-resp-msg-limit|set-resp-msg-limit [--port ...]" },
+	  "Tunnel CCI cmd via sideband (0xCCCC): identify|identify_memdev|get-partition|set-partition|get-fw-info|transfer-fw|vu-dlcfg|vu-getdevcfg|vu-ddrfreq|vu-pciespeed|activate-fw|get-health-info|get-alert-config|set-alert-config|get-poison-list|inject-poison|clear-poison|get-scan-media-cap|scan-media|get-scan-media-results|get-sld-qos-ctrl|set-sld-qos-ctrl|get-sld-qos-status|fm-get-ld-info|fm-get-ld-alloc|fm-set-ld-alloc|fm-get-qos-ctrl|fm-set-qos-ctrl|fm-get-qos-status|fm-get-qos-alloc-bw|fm-set-qos-alloc-bw|fm-get-qos-bw-limit|fm-set-qos-bw-limit|get-supported-logs|get-supported-feat|get-feature|set-feature|get-log|get-log-cap|clear-log|populate-log|bg-op-status|get-resp-msg-limit|set-resp-msg-limit|perform-maintenance [--port ...]" },
 };
 
 static const size_t nsubcmds = sizeof(subcmds) / sizeof(subcmds[0]);
