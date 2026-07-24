@@ -2109,6 +2109,84 @@ static int test_cmd_memdev_media_operations_sanitize(void)
 	return 0;
 }
 
+/* Device claims more discovery entries than the payload holds. */
+static int test_edge_media_ops_discovery_count_clamp(void)
+{
+	uint8_t rsp_buf[sizeof(struct cxlmi_cmd_memdev_media_operations_discovery_rsp) +
+			sizeof(struct cxlmi_cmd_memdev_media_ops_supported_list_entry)] = {0};
+	struct cxlmi_cmd_memdev_media_operations_discovery_rsp *rsp =
+		(struct cxlmi_cmd_memdev_media_operations_discovery_rsp *)rsp_buf;
+	uint8_t ret_buf[sizeof(struct cxlmi_cmd_memdev_media_operations_discovery_rsp) +
+			sizeof(struct cxlmi_cmd_memdev_media_ops_supported_list_entry)] = {0};
+	struct cxlmi_cmd_memdev_media_operations_discovery_rsp *ret =
+		(struct cxlmi_cmd_memdev_media_operations_discovery_rsp *)ret_buf;
+	struct cxlmi_cmd_memdev_media_operations_discovery_req req = {0};
+	int rc;
+
+	/* Mailbox max entries: (2048 - 12) / 2 */
+	ASSERT_EQ((CXL_MAILBOX_MAX_PAYLOAD_SIZE - 12) /
+		  sizeof(struct cxlmi_cmd_memdev_media_ops_supported_list_entry),
+		  1018, "media ops discovery max entries should be 1018");
+	ASSERT_EQ((CXL_MAILBOX_MAX_PAYLOAD_SIZE - 8) /
+		  sizeof(struct cxlmi_cmd_memdev_media_ops_dpa_range_list_entry),
+		  127, "media ops sanitize max ranges should be 127");
+
+	req.discovery_osa.num_ops = 8;
+	rsp->dpa_range_granularity = cpu_to_le64(0x1000);
+	rsp->total_supported_ops = cpu_to_le16(10);
+	rsp->num_supported_ops = cpu_to_le16(50); /* Claim far more than payload */
+	rsp->entry[0].media_op_class = 0x01;
+	rsp->entry[0].media_op_subclass = 0x00;
+
+	ASSERT_EQ(setup(), 0, "setup failed");
+	cxlmi_mock_set_response(test_ep, 0x44, 0x02, CXLMI_RET_SUCCESS,
+				rsp_buf, sizeof(rsp_buf));
+	rc = cxlmi_cmd_memdev_media_operations_discovery(test_ep, NULL, &req, ret);
+	teardown();
+
+	ASSERT_EQ(rc, CXLMI_RET_SUCCESS, "command failed");
+	ASSERT_EQ(ret->num_supported_ops, 1,
+		  "num_supported_ops should clamp to entries in payload");
+	ASSERT_EQ(ret->entry[0].media_op_class, 0x01, "class mismatch");
+	ASSERT_EQ(ret->entry[0].media_op_subclass, 0x00, "subclass mismatch");
+	return 0;
+}
+
+static int test_edge_media_ops_discovery_num_ops_limit(void)
+{
+	struct cxlmi_cmd_memdev_media_operations_discovery_req req = {0};
+	struct cxlmi_cmd_memdev_media_operations_discovery_rsp ret = {0};
+	int rc;
+
+	req.discovery_osa.num_ops = 2000; /* > 1018 */
+
+	ASSERT_EQ(setup(), 0, "setup failed");
+	cxlmi_mock_set_response(test_ep, 0x44, 0x02, CXLMI_RET_SUCCESS, NULL, 0);
+	rc = cxlmi_cmd_memdev_media_operations_discovery(test_ep, NULL, &req, &ret);
+	teardown();
+
+	ASSERT_EQ(rc, -1, "oversized num_ops should be rejected");
+	return 0;
+}
+
+static int test_edge_media_ops_sanitize_range_limit(void)
+{
+	struct cxlmi_cmd_memdev_media_operations_sanitize_req req = {0};
+	int rc;
+
+	req.media_operation_class = 0x01;
+	req.media_operation_subclass = 0x00;
+	req.dpa_range_count = 200; /* > 127 */
+
+	ASSERT_EQ(setup(), 0, "setup failed");
+	cxlmi_mock_set_response(test_ep, 0x44, 0x02, CXLMI_RET_SUCCESS, NULL, 0);
+	rc = cxlmi_cmd_memdev_media_operations_sanitize(test_ep, NULL, &req);
+	teardown();
+
+	ASSERT_EQ(rc, -1, "oversized dpa_range_count should be rejected");
+	return 0;
+}
+
 /* ============================================================
  * Additional FM-API Physical Switch Commands (0x51)
  * ============================================================ */
@@ -4908,6 +4986,37 @@ static int test_payload_media_operations_sanitize(void)
 	ASSERT_TRUE(dpa == 0x0000500000000000ULL, "range[1] dpa mismatch");
 	ASSERT_TRUE(len == 0x0000000020000000ULL, "range[1] len mismatch");
 
+	return 0;
+}
+
+static int test_payload_media_operations_sanitize_zero(void)
+{
+	uint8_t req_buf[sizeof(struct cxlmi_cmd_memdev_media_operations_sanitize_req) +
+			sizeof(struct cxlmi_cmd_memdev_media_ops_dpa_range_list_entry)];
+	struct cxlmi_cmd_memdev_media_operations_sanitize_req *req =
+		(struct cxlmi_cmd_memdev_media_operations_sanitize_req *)req_buf;
+	uint8_t payload[64];
+	size_t payload_size = sizeof(payload);
+	int rc;
+
+	memset(req_buf, 0, sizeof(req_buf));
+	req->media_operation_class = 0x01; /* Sanitize class */
+	req->media_operation_subclass = 0x01; /* Write Zero */
+	req->dpa_range_count = 1;
+	req->dpa_range_list[0].starting_dpa = 0x1000;
+	req->dpa_range_list[0].length = 0x2000;
+
+	ASSERT_EQ(setup(), 0, "setup failed");
+	cxlmi_mock_set_response(test_ep, 0x44, 0x02, CXLMI_RET_BACKGROUND, NULL, 0);
+	rc = cxlmi_cmd_memdev_media_operations_sanitize(test_ep, NULL, req);
+
+	cxlmi_mock_get_last_command(test_ep, NULL, NULL, payload, &payload_size);
+	teardown();
+
+	ASSERT_EQ(rc, CXLMI_RET_BACKGROUND, "expected BACKGROUND");
+	ASSERT_EQ(payload_size, 8 + 16, "payload size mismatch");
+	ASSERT_EQ(payload[0], 0x01, "media_operation_class mismatch");
+	ASSERT_EQ(payload[1], 0x01, "media_operation_subclass mismatch");
 	return 0;
 }
 
@@ -9944,6 +10053,9 @@ int main(void)
 	RUN_TEST(test_cmd_memdev_secure_erase);
 	RUN_TEST(test_cmd_memdev_media_operations_discovery);
 	RUN_TEST(test_cmd_memdev_media_operations_sanitize);
+	RUN_TEST(test_edge_media_ops_discovery_count_clamp);
+	RUN_TEST(test_edge_media_ops_discovery_num_ops_limit);
+	RUN_TEST(test_edge_media_ops_sanitize_range_limit);
 
 	TEST_SUITE("Security Commands");
 	RUN_TEST(test_cmd_memdev_get_security_state);
@@ -10121,6 +10233,7 @@ int main(void)
 	RUN_TEST(test_payload_fmapi_set_qos_bw_limit);
 	RUN_TEST(test_payload_security_send);
 	RUN_TEST(test_payload_media_operations_sanitize);
+	RUN_TEST(test_payload_media_operations_sanitize_zero);
 	RUN_TEST(test_payload_fmapi_get_phys_port_state);
 	RUN_TEST(test_payload_set_feature);
 	RUN_TEST(test_payload_get_feature);

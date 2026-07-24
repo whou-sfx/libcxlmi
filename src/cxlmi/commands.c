@@ -28,6 +28,20 @@
 	((CXL_MAILBOX_MAX_PAYLOAD_SIZE - SCAN_MEDIA_RESULTS_RSP_HDR_SZ) / \
 	 sizeof(struct cxlmi_media_error_record))
 
+/* CXL r3.2 Media Operations Discovery fixed header (no entries). */
+#define MEDIA_OPS_DISCOVERY_RSP_HDR_SZ 12
+/* Fit header + entries into CXL_MAILBOX_MAX_PAYLOAD_SIZE (2048). */
+#define MAX_MEDIA_OPS_SUPPORTED \
+	((CXL_MAILBOX_MAX_PAYLOAD_SIZE - MEDIA_OPS_DISCOVERY_RSP_HDR_SZ) / \
+	 sizeof(struct cxlmi_cmd_memdev_media_ops_supported_list_entry))
+
+/* CXL r3.2 Media Operations Sanitize fixed header (no DPA ranges). */
+#define MEDIA_OPS_SANITIZE_REQ_HDR_SZ 8
+/* Fit header + ranges into CXL_MAILBOX_MAX_PAYLOAD_SIZE (2048). */
+#define MAX_MEDIA_OPS_DPA_RANGES \
+	((CXL_MAILBOX_MAX_PAYLOAD_SIZE - MEDIA_OPS_SANITIZE_REQ_HDR_SZ) / \
+	 sizeof(struct cxlmi_cmd_memdev_media_ops_dpa_range_list_entry))
+
 CXLMI_EXPORT int cxlmi_cmd_identify(struct cxlmi_endpoint *ep,
 				    struct cxlmi_tunnel_info *ti,
 				    struct cxlmi_cmd_identify_rsp *ret)
@@ -1624,10 +1638,17 @@ int cxlmi_cmd_memdev_media_operations_discovery(struct cxlmi_endpoint *ep,
 	struct cxlmi_cmd_memdev_media_operations_discovery_rsp *rsp_pl;
 	_cleanup_free_ struct cxlmi_cci_msg *req = NULL;
 	_cleanup_free_ struct cxlmi_cci_msg *rsp = NULL;
-	ssize_t req_sz, rsp_sz;
+	ssize_t req_sz, rsp_sz, rsp_sz_min;
+	uint16_t req_num_ops, num_supported;
+	size_t entries_in_rsp;
 	int i, rc = -1;
 
 	CXLMI_BUILD_BUG_ON(sizeof(*in) != 12);
+	CXLMI_BUILD_BUG_ON(MEDIA_OPS_DISCOVERY_RSP_HDR_SZ != 12);
+
+	req_num_ops = in->discovery_osa.num_ops;
+	if (req_num_ops > MAX_MEDIA_OPS_SUPPORTED)
+		return -1;
 
 	req_sz = sizeof(*req_pl) + sizeof(*req);
 	req = calloc(1, req_sz);
@@ -1641,15 +1662,16 @@ int cxlmi_cmd_memdev_media_operations_discovery(struct cxlmi_endpoint *ep,
 	req_pl->media_operation_subclass = in->media_operation_subclass;
 	req_pl->dpa_range_count = cpu_to_le32(in->dpa_range_count);
 	req_pl->discovery_osa.start_index = cpu_to_le16(in->discovery_osa.start_index);
-	req_pl->discovery_osa.num_ops = cpu_to_le16(in->discovery_osa.num_ops);
+	req_pl->discovery_osa.num_ops = cpu_to_le16(req_num_ops);
 
+	rsp_sz_min = sizeof(*rsp) + MEDIA_OPS_DISCOVERY_RSP_HDR_SZ;
 	rsp_sz = sizeof(*rsp) + sizeof(*rsp_pl) +
-		 in->discovery_osa.num_ops * sizeof(*rsp_pl->entry);
+		 req_num_ops * sizeof(*rsp_pl->entry);
 	rsp = calloc(1, rsp_sz);
 	if (!rsp)
 		return -1;
 
-	rc = send_cmd_cci(ep, ti, req, req_sz, rsp, rsp_sz, sizeof(*rsp) + sizeof(*rsp_pl));
+	rc = send_cmd_cci(ep, ti, req, req_sz, rsp, rsp_sz, rsp_sz_min);
 	if (rc)
 		return rc;
 
@@ -1658,9 +1680,24 @@ int cxlmi_cmd_memdev_media_operations_discovery(struct cxlmi_endpoint *ep,
 
 	ret->dpa_range_granularity = le64_to_cpu(rsp_pl->dpa_range_granularity);
 	ret->total_supported_ops = le16_to_cpu(rsp_pl->total_supported_ops);
-	ret->num_supported_ops = le16_to_cpu(rsp_pl->num_supported_ops);
 
-	for (i = 0; i < ret->num_supported_ops; i++) {
+	num_supported = le16_to_cpu(rsp_pl->num_supported_ops);
+	entries_in_rsp = 0;
+	if (rsp->pl_length[0] || rsp->pl_length[1] || (rsp->pl_length[2] & 0xf)) {
+		uint32_t pl_length = rsp->pl_length[0] |
+			(rsp->pl_length[1] << 8) |
+			((rsp->pl_length[2] & 0xf) << 16);
+
+		if (pl_length > MEDIA_OPS_DISCOVERY_RSP_HDR_SZ)
+			entries_in_rsp = (pl_length - MEDIA_OPS_DISCOVERY_RSP_HDR_SZ) /
+				sizeof(rsp_pl->entry[0]);
+	}
+	num_supported = min_t(uint16_t, num_supported, entries_in_rsp);
+	num_supported = min_t(uint16_t, num_supported, req_num_ops);
+	num_supported = min_t(uint16_t, num_supported, MAX_MEDIA_OPS_SUPPORTED);
+	ret->num_supported_ops = num_supported;
+
+	for (i = 0; i < num_supported; i++) {
 		ret->entry[i].media_op_class = rsp_pl->entry[i].media_op_class;
 		ret->entry[i].media_op_subclass = rsp_pl->entry[i].media_op_subclass;
 	}
@@ -1678,6 +1715,11 @@ int cxlmi_cmd_memdev_media_operations_sanitize(struct cxlmi_endpoint *ep,
 	struct cxlmi_cci_msg rsp;
 	size_t req_sz, req_pl_sz;
 	int i;
+
+	CXLMI_BUILD_BUG_ON(MEDIA_OPS_SANITIZE_REQ_HDR_SZ != 8);
+
+	if (in->dpa_range_count > MAX_MEDIA_OPS_DPA_RANGES)
+		return -1;
 
 	req_pl_sz = sizeof(*req_pl) +
 		    in->dpa_range_count * sizeof(*in->dpa_range_list);

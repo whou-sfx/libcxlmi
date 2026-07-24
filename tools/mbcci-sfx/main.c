@@ -42,6 +42,8 @@ static const struct subcmd subcmds[] = {
 	  "Scan Media (4304h) --dpa <addr> --length <bytes> [--no-evtlog]" },
 	{ "get-scan-media-results",    cmd_get_scan_media_results,
 	  "Get Scan Media Results (4305h)" },
+	{ "media-operation",           cmd_media_operation,
+	  "Media Operations (4402h) discovery|sanitize [args...]" },
 	{ "get-sld-qos-ctrl",          cmd_get_sld_qos_ctrl,
 	  "Get SLD QoS Control (4700h)" },
 	{ "set-sld-qos-ctrl",          cmd_set_sld_qos_ctrl,

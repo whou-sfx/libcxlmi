@@ -122,6 +122,8 @@ int cmd_get_scan_media_cap(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_scan_media(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_scan_media_results(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+int cmd_media_operation(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_vu_evtadd(struct cxlmi_endpoint *ep, int argc, char **argv);
 
 struct vu_dlcfg_params {
