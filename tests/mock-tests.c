@@ -3310,6 +3310,93 @@ static int test_edge_get_scan_media_results_empty(void)
 	return 0;
 }
 
+/* Test get_scan_media_results with multiple records */
+static int test_edge_get_scan_media_results_multiple(void)
+{
+	uint8_t rsp_buf[sizeof(struct cxlmi_cmd_memdev_get_scan_media_results_rsp) +
+			2 * sizeof(struct cxlmi_media_error_record)] = {0};
+	struct cxlmi_cmd_memdev_get_scan_media_results_rsp *rsp =
+		(struct cxlmi_cmd_memdev_get_scan_media_results_rsp *)rsp_buf;
+	uint8_t ret_buf[sizeof(struct cxlmi_cmd_memdev_get_scan_media_results_rsp) +
+			2 * sizeof(struct cxlmi_media_error_record)] = {0};
+	struct cxlmi_cmd_memdev_get_scan_media_results_rsp *ret =
+		(struct cxlmi_cmd_memdev_get_scan_media_results_rsp *)ret_buf;
+	int rc;
+
+	rsp->scan_media_restart_physaddr = cpu_to_le64(0x1000);
+	rsp->scan_media_restart_physaddr_length = cpu_to_le64(0x2000);
+	rsp->scan_media_flags = 0x02; /* STOPPED */
+	rsp->media_error_count = cpu_to_le16(2);
+	rsp->record[0].media_error_address = cpu_to_le64(0x1000);
+	rsp->record[0].media_error_length = cpu_to_le32(64);
+	rsp->record[1].media_error_address = cpu_to_le64(0x2000);
+	rsp->record[1].media_error_length = cpu_to_le32(128);
+
+	ASSERT_EQ(setup(), 0, "setup failed");
+	cxlmi_mock_set_response(test_ep, 0x43, 0x05, CXLMI_RET_SUCCESS,
+				rsp_buf, sizeof(rsp_buf));
+	rc = cxlmi_cmd_memdev_get_scan_media_results(test_ep, NULL, ret);
+	teardown();
+
+	ASSERT_EQ(rc, CXLMI_RET_SUCCESS, "command failed");
+	ASSERT_EQ(ret->media_error_count, 2, "should be 2 errors");
+	ASSERT_EQ(ret->scan_media_flags, 0x02, "flags mismatch");
+	ASSERT_TRUE(ret->record[0].media_error_address == 0x1000,
+		    "record[0] address mismatch");
+	ASSERT_EQ(ret->record[0].media_error_length, 64,
+		  "record[0] length mismatch");
+	ASSERT_TRUE(ret->record[1].media_error_address == 0x2000,
+		    "record[1] address mismatch");
+	ASSERT_EQ(ret->record[1].media_error_length, 128,
+		  "record[1] length mismatch");
+	return 0;
+}
+
+/*
+ * Device claims more records than the response payload can hold.
+ * Library must clamp media_error_count to records present in pl_length.
+ */
+static int test_edge_get_scan_media_results_count_clamp(void)
+{
+	uint8_t rsp_buf[sizeof(struct cxlmi_cmd_memdev_get_scan_media_results_rsp) +
+			sizeof(struct cxlmi_media_error_record)] = {0};
+	struct cxlmi_cmd_memdev_get_scan_media_results_rsp *rsp =
+		(struct cxlmi_cmd_memdev_get_scan_media_results_rsp *)rsp_buf;
+	uint8_t ret_buf[sizeof(struct cxlmi_cmd_memdev_get_scan_media_results_rsp) +
+			sizeof(struct cxlmi_media_error_record)] = {0};
+	struct cxlmi_cmd_memdev_get_scan_media_results_rsp *ret =
+		(struct cxlmi_cmd_memdev_get_scan_media_results_rsp *)ret_buf;
+	int rc;
+
+	/* Mailbox max fits header + 126 records: (2048 - 0x20) / 16 */
+	ASSERT_EQ((CXL_MAILBOX_MAX_PAYLOAD_SIZE - 0x20) /
+		  sizeof(struct cxlmi_media_error_record),
+		  126, "scan media max records should be 126");
+
+	rsp->scan_media_restart_physaddr = 0;
+	rsp->scan_media_restart_physaddr_length = 0;
+	rsp->scan_media_flags = 0x01; /* MORE */
+	/* Claim far more than the single record present in the payload */
+	rsp->media_error_count = cpu_to_le16(200);
+	rsp->record[0].media_error_address = cpu_to_le64(0xABCD);
+	rsp->record[0].media_error_length = cpu_to_le32(32);
+
+	ASSERT_EQ(setup(), 0, "setup failed");
+	cxlmi_mock_set_response(test_ep, 0x43, 0x05, CXLMI_RET_SUCCESS,
+				rsp_buf, sizeof(rsp_buf));
+	rc = cxlmi_cmd_memdev_get_scan_media_results(test_ep, NULL, ret);
+	teardown();
+
+	ASSERT_EQ(rc, CXLMI_RET_SUCCESS, "command failed");
+	ASSERT_EQ(ret->media_error_count, 1,
+		  "count should clamp to records in payload");
+	ASSERT_TRUE(ret->record[0].media_error_address == 0xABCD,
+		    "record address mismatch");
+	ASSERT_EQ(ret->record[0].media_error_length, 32,
+		  "record length mismatch");
+	return 0;
+}
+
 /* ============================================================
  * Edge Case Tests - Boundary Values
  * ============================================================ */
@@ -8423,8 +8510,8 @@ static int test_endian_get_poison_list_response(void)
 }
 
 /*
- * Test scan_media request encoding (64-bit addresses).
- * Note: scan_media_flags is 8-bit in struct but library writes 16-bit LE.
+ * Test scan_media request encoding (64-bit addresses, 1-byte flags).
+ * Payload is exactly 17 bytes: 8 + 8 + 1.
  */
 static int test_endian_scan_media_request(void)
 {
@@ -8447,6 +8534,7 @@ static int test_endian_scan_media_request(void)
 	ASSERT_EQ(rc, CXLMI_RET_SUCCESS, "command failed");
 	ASSERT_EQ(cmd_set, 0x43, "wrong command set");
 	ASSERT_EQ(cmd, 0x04, "wrong command");
+	ASSERT_EQ(cmd_payload_size, 17, "payload size should be 17 bytes");
 
 	/* scan_media_physaddr: 0x123456789ABCDEF0 -> F0 DE BC 9A 78 56 34 12 */
 	ASSERT_EQ(cmd_payload[0], 0xF0, "physaddr byte 0 wrong");
@@ -8468,8 +8556,8 @@ static int test_endian_scan_media_request(void)
 	ASSERT_EQ(cmd_payload[14], 0xDC, "physaddr_length byte 6 wrong");
 	ASSERT_EQ(cmd_payload[15], 0xFE, "physaddr_length byte 7 wrong");
 
-	/* scan_media_flags: low byte should be 0x03 (library writes 16-bit LE) */
-	ASSERT_EQ(cmd_payload[16], 0x03, "flags low byte wrong");
+	/* scan_media_flags: single byte only */
+	ASSERT_EQ(cmd_payload[16], 0x03, "flags byte wrong");
 
 	return 0;
 }
@@ -9978,6 +10066,8 @@ int main(void)
 	RUN_TEST(test_edge_get_supported_features_empty);
 	RUN_TEST(test_edge_get_log_cel_empty);
 	RUN_TEST(test_edge_get_scan_media_results_empty);
+	RUN_TEST(test_edge_get_scan_media_results_multiple);
+	RUN_TEST(test_edge_get_scan_media_results_count_clamp);
 
 	TEST_SUITE("Edge Cases - Boundary Values");
 	RUN_TEST(test_edge_identify_max_values);

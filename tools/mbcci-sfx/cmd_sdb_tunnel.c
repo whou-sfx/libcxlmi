@@ -29,6 +29,9 @@
  *   get-poison-list   Get Poison List (opcode 0x4300)
  *   inject-poison     Inject Poison (opcode 0x4301)
  *   clear-poison      Clear Poison (opcode 0x4302)
+ *   get-scan-media-cap Get Scan Media Capabilities (opcode 0x4303)
+ *   scan-media        Scan Media (opcode 0x4304)
+ *   get-scan-media-results Get Scan Media Results (opcode 0x4305)
  *   get-sld-qos-ctrl  Get SLD QoS Control (opcode 0x4700)
  *   set-sld-qos-ctrl  Set SLD QoS Control (opcode 0x4701)
  *   get-sld-qos-status Get SLD QoS Status (opcode 0x4702)
@@ -2983,6 +2986,322 @@ out:
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel scan media commands (inner opcodes 0x4303-0x4305)      */
+/* ------------------------------------------------------------------ */
+
+#define SDB_SCAN_MEDIA_RESULTS_RSP_HDR_SZ 0x20
+#define SDB_SCAN_MEDIA_MAX_RECORDS \
+	((CXL_MAILBOX_MAX_PAYLOAD_SIZE - SDB_SCAN_MEDIA_RESULTS_RSP_HDR_SZ) / \
+	 sizeof(struct cxlmi_media_error_record))
+#define SDB_SCAN_MEDIA_MAX_ITERATIONS 64
+#define SDB_SCAN_MEDIA_FLAG_NO_EVENT_LOG (1U << 0)
+#define SDB_SCAN_RESULTS_FLAG_MORE (1U << 0)
+
+static int sdb_tunnel_get_scan_media_cap(struct cxlmi_endpoint *ep,
+					 int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg msg;
+		struct cxlmi_cmd_memdev_get_scan_media_capabilities_req payload;
+	} __attribute__((packed)) req;
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg msg;
+		struct cxlmi_cmd_memdev_get_scan_media_capabilities_rsp payload;
+	} __attribute__((packed)) rsp;
+	struct cxlmi_cmd_memdev_get_scan_media_capabilities_req params;
+	struct cxlmi_cmd_memdev_get_scan_media_capabilities_rsp host;
+	char **scan_argv;
+	uint8_t port_id;
+	int scan_argc;
+	int rc;
+
+	scan_argv = calloc(argc ? (size_t)argc : 1, sizeof(*scan_argv));
+	if (!scan_argv) {
+		perror("sdb-tunnel get-scan-media-cap: calloc");
+		return -1;
+	}
+	rc = sdb_split_poison_args(argc, argv, &port_id, scan_argv, &scan_argc);
+	if (rc)
+		goto out;
+	rc = parse_get_scan_media_cap_req(scan_argc, scan_argv, &params);
+	if (rc)
+		goto out;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id = port_id;
+	req.hdr.target_type = 0;
+	req.hdr.command_size =
+		(uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+	req.msg.command = 0x03;     /* GET_SCAN_MEDIA_CAPABILITIES */
+	req.msg.command_set = 0x43; /* MEDIA_AND_POISON */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] =
+		(uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+	req.payload.get_scan_media_capabilities_start_physaddr =
+		cpu_to_le64(params.get_scan_media_capabilities_start_physaddr);
+	req.payload.get_scan_media_capabilities_physaddr_length =
+		cpu_to_le64(params.get_scan_media_capabilities_physaddr_length);
+
+	memset(&rsp, 0, sizeof(rsp));
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req), &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr,
+				"sdb-tunnel get-scan-media-cap failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel get-scan-media-cap ioctl failed\n");
+		goto out;
+	}
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel get-scan-media-cap: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		rc = (int)rsp.msg.return_code;
+		goto out;
+	}
+
+	memset(&host, 0, sizeof(host));
+	host.estimated_scan_media_time =
+		le32_to_cpu(rsp.payload.estimated_scan_media_time);
+	print_scan_media_capabilities(&host);
+out:
+	free(scan_argv);
+	return rc;
+}
+
+static int sdb_tunnel_scan_media(struct cxlmi_endpoint *ep,
+				 int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg msg;
+		struct cxlmi_cmd_memdev_scan_media_req payload;
+	} __attribute__((packed)) req;
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg msg;
+	} __attribute__((packed)) rsp;
+	struct cxlmi_cmd_memdev_scan_media_req params;
+	char **scan_argv;
+	uint8_t port_id;
+	int scan_argc;
+	int rc;
+
+	scan_argv = calloc(argc ? (size_t)argc : 1, sizeof(*scan_argv));
+	if (!scan_argv) {
+		perror("sdb-tunnel scan-media: calloc");
+		return -1;
+	}
+	rc = sdb_split_poison_args(argc, argv, &port_id, scan_argv, &scan_argc);
+	if (rc)
+		goto out;
+	rc = parse_scan_media_req(scan_argc, scan_argv, &params);
+	if (rc)
+		goto out;
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id = port_id;
+	req.hdr.target_type = 0;
+	req.hdr.command_size =
+		(uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+	req.msg.command = 0x04;     /* SCAN_MEDIA */
+	req.msg.command_set = 0x43; /* MEDIA_AND_POISON */
+	req.msg.pl_length[0] = (uint8_t)(sizeof(req.payload) & 0xff);
+	req.msg.pl_length[1] =
+		(uint8_t)((sizeof(req.payload) >> 8) & 0xff);
+	req.payload.scan_media_physaddr =
+		cpu_to_le64(params.scan_media_physaddr);
+	req.payload.scan_media_physaddr_length =
+		cpu_to_le64(params.scan_media_physaddr_length);
+	req.payload.scan_media_flags = params.scan_media_flags;
+
+	memset(&rsp, 0, sizeof(rsp));
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req), &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel scan-media failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel scan-media ioctl failed\n");
+		goto out;
+	}
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+	if (rsp.msg.return_code != 0 &&
+	    rsp.msg.return_code != CXLMI_RET_BACKGROUND) {
+		fprintf(stderr,
+			"sdb-tunnel scan-media: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		rc = (int)rsp.msg.return_code;
+		goto out;
+	}
+
+	if (rsp.msg.return_code == CXLMI_RET_BACKGROUND)
+		printf("Scan media started as background operation\n");
+	else
+		printf("Scan media OK\n");
+	printf("  DPA:    0x%016llx\n",
+	       (unsigned long long)params.scan_media_physaddr);
+	printf("  Length: 0x%016llx\n",
+	       (unsigned long long)params.scan_media_physaddr_length);
+	printf("  Flags:  0x%02x%s\n", params.scan_media_flags,
+	       (params.scan_media_flags & SDB_SCAN_MEDIA_FLAG_NO_EVENT_LOG) ?
+	       " NO_EVTLOG" : "");
+	rc = 0;
+out:
+	free(scan_argv);
+	return rc;
+}
+
+static int sdb_tunnel_get_scan_media_results(struct cxlmi_endpoint *ep,
+					     int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr hdr;
+		struct cxlmi_cci_msg msg;
+	} __attribute__((packed)) req;
+	struct cxlmi_cmd_memdev_get_scan_media_results_rsp *wire_rsp;
+	struct cxlmi_cmd_memdev_get_scan_media_results_rsp *host_rsp;
+	struct cxlmi_cci_msg *inner_rsp;
+	uint8_t *rsp_buf;
+	size_t rsp_payload_sz;
+	size_t rsp_buf_sz;
+	uint32_t payload_len;
+	uint16_t record_count;
+	uint8_t port_id = 0;
+	int iter;
+	int rc;
+	int i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel get-scan-media-results [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	rsp_payload_sz = sizeof(*host_rsp) +
+		SDB_SCAN_MEDIA_MAX_RECORDS *
+			sizeof(struct cxlmi_media_error_record);
+	rsp_buf_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
+		     sizeof(struct cxlmi_cci_msg) + rsp_payload_sz;
+	rsp_buf = calloc(1, rsp_buf_sz);
+	host_rsp = calloc(1, rsp_payload_sz);
+	if (!rsp_buf || !host_rsp) {
+		perror("sdb-tunnel get-scan-media-results: calloc");
+		free(rsp_buf);
+		free(host_rsp);
+		return -1;
+	}
+
+	for (iter = 0; iter < SDB_SCAN_MEDIA_MAX_ITERATIONS; iter++) {
+		memset(&req, 0, sizeof(req));
+		memset(rsp_buf, 0, rsp_buf_sz);
+		memset(host_rsp, 0, rsp_payload_sz);
+
+		req.hdr.id = port_id;
+		req.hdr.target_type = 0;
+		req.hdr.command_size = (uint16_t)sizeof(req.msg);
+		req.msg.command = 0x05;     /* GET_SCAN_MEDIA_RESULTS */
+		req.msg.command_set = 0x43; /* MEDIA_AND_POISON */
+
+		if (iter > 0)
+			printf("--- scan media results continuation %d ---\n",
+			       iter);
+
+		dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+		rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+					       &req, sizeof(req),
+					       rsp_buf, rsp_buf_sz);
+		if (rc) {
+			if (rc > 0)
+				fprintf(stderr,
+					"sdb-tunnel get-scan-media-results failed: %s\n",
+					cxlmi_cmd_retcode_tostr(rc));
+			else
+				fprintf(stderr,
+					"sdb-tunnel get-scan-media-results ioctl failed\n");
+			goto out;
+		}
+
+		dump_hex("sdb-tunnel RX", rsp_buf, rsp_buf_sz);
+		inner_rsp = (struct cxlmi_cci_msg *)
+			(rsp_buf + sizeof(struct sdb_tunnel_rsp_hdr));
+		if (inner_rsp->return_code != 0) {
+			fprintf(stderr,
+				"sdb-tunnel get-scan-media-results: inner CCI error 0x%04x\n",
+				inner_rsp->return_code);
+			rc = (int)inner_rsp->return_code;
+			goto out;
+		}
+
+		payload_len = sdb_payload_length(inner_rsp);
+		if (payload_len < SDB_SCAN_MEDIA_RESULTS_RSP_HDR_SZ ||
+		    payload_len > rsp_payload_sz) {
+			fprintf(stderr,
+				"sdb-tunnel get-scan-media-results: invalid response payload length %u\n",
+				payload_len);
+			rc = -1;
+			goto out;
+		}
+
+		wire_rsp = (struct cxlmi_cmd_memdev_get_scan_media_results_rsp *)
+			inner_rsp->payload;
+		host_rsp->scan_media_restart_physaddr =
+			le64_to_cpu(wire_rsp->scan_media_restart_physaddr);
+		host_rsp->scan_media_restart_physaddr_length =
+			le64_to_cpu(wire_rsp->scan_media_restart_physaddr_length);
+		host_rsp->scan_media_flags = wire_rsp->scan_media_flags;
+		record_count = le16_to_cpu(wire_rsp->media_error_count);
+		if (record_count > (payload_len - SDB_SCAN_MEDIA_RESULTS_RSP_HDR_SZ) /
+				   sizeof(struct cxlmi_media_error_record))
+			record_count = (uint16_t)
+				((payload_len - SDB_SCAN_MEDIA_RESULTS_RSP_HDR_SZ) /
+				 sizeof(struct cxlmi_media_error_record));
+		if (record_count > SDB_SCAN_MEDIA_MAX_RECORDS)
+			record_count = SDB_SCAN_MEDIA_MAX_RECORDS;
+		host_rsp->media_error_count = record_count;
+		for (i = 0; i < record_count; i++) {
+			host_rsp->record[i].media_error_address =
+				le64_to_cpu(wire_rsp->record[i].media_error_address);
+			host_rsp->record[i].media_error_length =
+				le32_to_cpu(wire_rsp->record[i].media_error_length);
+		}
+
+		print_scan_media_results(host_rsp);
+		if (!(host_rsp->scan_media_flags & SDB_SCAN_RESULTS_FLAG_MORE)) {
+			rc = 0;
+			goto out;
+		}
+	}
+
+	fprintf(stderr,
+		"sdb-tunnel get-scan-media-results: reached max iterations (%d) with MORE still set\n",
+		SDB_SCAN_MEDIA_MAX_ITERATIONS);
+	rc = -1;
+
+out:
+	free(rsp_buf);
+	free(host_rsp);
+	return rc;
+}
+
+/* ------------------------------------------------------------------ */
 /* sdb-tunnel fm-get-ld-info (inner opcode 0x5400)                  */
 /* ------------------------------------------------------------------ */
 
@@ -5326,6 +5645,11 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  inject-poison     [--port <vdm0|vdm1|i3c>] --dpa <addr>             Inject Poison (0x4301)\n"
 			"  clear-poison      [--port <vdm0|vdm1|i3c>] --dpa <addr> [--write-data <128-hex-digits>]\n"
 			"                                                                         Clear Poison (0x4302)\n"
+			"  get-scan-media-cap [--port <vdm0|vdm1|i3c>] --dpa <addr> --length <bytes>\n"
+			"                                                                         Get Scan Media Capabilities (0x4303)\n"
+			"  scan-media        [--port <vdm0|vdm1|i3c>] --dpa <addr> --length <bytes> [--no-evtlog]\n"
+			"                                                                         Scan Media (0x4304)\n"
+			"  get-scan-media-results [--port <vdm0|vdm1|i3c>]                     Get Scan Media Results (0x4305)\n"
 			"  get-sld-qos-ctrl   [--port <vdm0|vdm1|i3c>]                        Get SLD QoS Control (0x4700)\n"
 			"  set-sld-qos-ctrl   [--port <vdm0|vdm1|i3c>] [--egress-congestion-control-enable <0|1>] [--egress-tpr-enable <0|1>] ...\n"
 			"                                                                         Set SLD QoS Control (0x4701)\n"
@@ -5406,6 +5730,12 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_inject_poison(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "clear-poison") == 0)
 		return sdb_tunnel_clear_poison(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-scan-media-cap") == 0)
+		return sdb_tunnel_get_scan_media_cap(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "scan-media") == 0)
+		return sdb_tunnel_scan_media(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "get-scan-media-results") == 0)
+		return sdb_tunnel_get_scan_media_results(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "get-sld-qos-ctrl") == 0)
 		return sdb_tunnel_get_sld_qos_ctrl(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "set-sld-qos-ctrl") == 0)
@@ -5471,7 +5801,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
-		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-poison-list, inject-poison, clear-poison, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, fm-set-ld-alloc, fm-get-qos-ctrl, fm-set-qos-ctrl, fm-get-qos-status, fm-get-qos-alloc-bw, fm-set-qos-alloc-bw, fm-get-qos-bw-limit, fm-set-qos-bw-limit, get-supported-logs, get-supported-feat, get-feature, set-feature, get-log, get-log-cap, clear-log, populate-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
+		"  supported: identify, identify_memdev, get-partition, set-partition, get-fw-info, transfer-fw, activate-fw, get-health-info, get-alert-config, set-alert-config, get-poison-list, inject-poison, clear-poison, get-scan-media-cap, scan-media, get-scan-media-results, get-sld-qos-ctrl, set-sld-qos-ctrl, get-sld-qos-status, fm-get-ld-info, fm-get-ld-alloc, fm-set-ld-alloc, fm-get-qos-ctrl, fm-set-qos-ctrl, fm-get-qos-status, fm-get-qos-alloc-bw, fm-set-qos-alloc-bw, fm-get-qos-bw-limit, fm-set-qos-bw-limit, get-supported-logs, get-supported-feat, get-feature, set-feature, get-log, get-log-cap, clear-log, populate-log, bg-op-status, bg-op-abort, get-resp-msg-limit, set-resp-msg-limit,"
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp\n");

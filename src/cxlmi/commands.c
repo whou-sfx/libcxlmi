@@ -21,8 +21,12 @@
 	((CXL_MAILBOX_MAX_PAYLOAD_SIZE - POISON_LIST_RSP_HDR_SZ) / \
 	 sizeof(struct cxlmi_memdev_media_err_record))
 
-/* Max scan media error records - same as poison records */
-#define MAX_SCAN_MEDIA_RECORDS 256
+/* CXL r3.1 Get Scan Media Results fixed header (no records). */
+#define SCAN_MEDIA_RESULTS_RSP_HDR_SZ 0x20
+/* Fit header + records into CXL_MAILBOX_MAX_PAYLOAD_SIZE (2048). */
+#define MAX_SCAN_MEDIA_RECORDS \
+	((CXL_MAILBOX_MAX_PAYLOAD_SIZE - SCAN_MEDIA_RESULTS_RSP_HDR_SZ) / \
+	 sizeof(struct cxlmi_media_error_record))
 
 CXLMI_EXPORT int cxlmi_cmd_identify(struct cxlmi_endpoint *ep,
 				    struct cxlmi_tunnel_info *ti,
@@ -1524,7 +1528,7 @@ CXLMI_EXPORT int cxlmi_cmd_memdev_scan_media(struct cxlmi_endpoint *ep,
 	req_pl = (struct cxlmi_cmd_memdev_scan_media_req *)req->payload;
 	req_pl->scan_media_physaddr = cpu_to_le64(in->scan_media_physaddr);
 	req_pl->scan_media_physaddr_length = cpu_to_le64(in->scan_media_physaddr_length);
-	req_pl->scan_media_flags = cpu_to_le16(in->scan_media_flags);
+	req_pl->scan_media_flags = in->scan_media_flags;
 
 	return send_cmd_cci(ep, ti, req, req_sz, &rsp, sizeof(rsp), sizeof(rsp));
 }
@@ -1537,9 +1541,12 @@ CXLMI_EXPORT int cxlmi_cmd_memdev_get_scan_media_results(struct cxlmi_endpoint *
 	struct cxlmi_cci_msg req;
 	_cleanup_free_ struct cxlmi_cci_msg *rsp = NULL;
 	int i, rc;
-	ssize_t rsp_sz;
+	ssize_t rsp_sz, rsp_sz_min;
+	uint16_t record_cnt;
+	size_t records_in_rsp;
 
 	arm_cci_request(ep, &req, 0, MEDIA_AND_POISON, GET_SCAN_MEDIA_RESULTS);
+	rsp_sz_min = sizeof(*rsp) + SCAN_MEDIA_RESULTS_RSP_HDR_SZ;
 	rsp_sz = sizeof(*rsp) + sizeof(*rsp_pl) +
 		 (MAX_SCAN_MEDIA_RECORDS * sizeof(rsp_pl->record[0]));
 
@@ -1547,7 +1554,7 @@ CXLMI_EXPORT int cxlmi_cmd_memdev_get_scan_media_results(struct cxlmi_endpoint *
 	if (!rsp)
 		return -1;
 
-	rc = send_cmd_cci(ep, ti, &req, sizeof(req), rsp, rsp_sz, rsp_sz);
+	rc = send_cmd_cci(ep, ti, &req, sizeof(req), rsp, rsp_sz, rsp_sz_min);
 	if (rc)
 		return rc;
 
@@ -1559,8 +1566,23 @@ CXLMI_EXPORT int cxlmi_cmd_memdev_get_scan_media_results(struct cxlmi_endpoint *
 	ret->scan_media_restart_physaddr_length =
 		le64_to_cpu(rsp_pl->scan_media_restart_physaddr_length);
 	ret->scan_media_flags = rsp_pl->scan_media_flags;
-	ret->media_error_count = le16_to_cpu(rsp_pl->media_error_count);
-	for (i = 0; i < ret->media_error_count; i++) {
+
+	record_cnt = le16_to_cpu(rsp_pl->media_error_count);
+	records_in_rsp = 0;
+	if (rsp->pl_length[0] || rsp->pl_length[1] || (rsp->pl_length[2] & 0xf)) {
+		uint32_t pl_length = rsp->pl_length[0] |
+			(rsp->pl_length[1] << 8) |
+			((rsp->pl_length[2] & 0xf) << 16);
+
+		if (pl_length > SCAN_MEDIA_RESULTS_RSP_HDR_SZ)
+			records_in_rsp = (pl_length - SCAN_MEDIA_RESULTS_RSP_HDR_SZ) /
+				sizeof(rsp_pl->record[0]);
+	}
+	record_cnt = min_t(uint16_t, record_cnt, records_in_rsp);
+	record_cnt = min_t(uint16_t, record_cnt, MAX_SCAN_MEDIA_RECORDS);
+	ret->media_error_count = record_cnt;
+
+	for (i = 0; i < record_cnt; i++) {
 		ret->record[i].media_error_address =
 			le64_to_cpu(rsp_pl->record[i].media_error_address);
 		ret->record[i].media_error_length =

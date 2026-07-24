@@ -109,6 +109,19 @@ int cmd_get_poison_list(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_inject_poison(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_clear_poison(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+int parse_get_scan_media_cap_req(
+	int argc, char **argv,
+	struct cxlmi_cmd_memdev_get_scan_media_capabilities_req *req);
+int parse_scan_media_req(int argc, char **argv,
+			 struct cxlmi_cmd_memdev_scan_media_req *req);
+void print_scan_media_capabilities(
+	const struct cxlmi_cmd_memdev_get_scan_media_capabilities_rsp *rsp);
+void print_scan_media_results(
+	const struct cxlmi_cmd_memdev_get_scan_media_results_rsp *rsp);
+int cmd_get_scan_media_cap(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_scan_media(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_get_scan_media_results(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_vu_evtadd(struct cxlmi_endpoint *ep, int argc, char **argv);
 
 struct vu_dlcfg_params {
