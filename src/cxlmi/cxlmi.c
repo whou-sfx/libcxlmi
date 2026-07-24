@@ -817,6 +817,15 @@ static int send_ioctl_direct(struct cxlmi_endpoint *ep,
 				  cmd.retval);
 		return cmd.retval;
 	}
+	/*
+	 * Mailbox RAW ioctl only returns the payload bytes via out.payload.
+	 * Synthesize CCI pl_length so callers that size flexible arrays from
+	 * the response header (e.g. get_poison_list) see the real length.
+	 */
+	rsp_msg->pl_length[0] = cmd.out.size & 0xff;
+	rsp_msg->pl_length[1] = (cmd.out.size >> 8) & 0xff;
+	rsp_msg->pl_length[2] = (cmd.out.size >> 16) & 0x0f;
+
 	/* To make it compatible with CXL2.0, do not impose size check */
 	if (cmd.out.size < rsp_msg_sz_min - sizeof(*rsp_msg)) {
 		cxlmi_msg(ctx, LOG_WARNING, "ioctl returned too little data\n");

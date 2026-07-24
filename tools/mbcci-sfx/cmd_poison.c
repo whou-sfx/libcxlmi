@@ -22,6 +22,7 @@
 #define POISON_REQ_RESTART_BIT (1ULL << 0)
 #define POISON_RSP_FLAG_MORE     (1U << 0)
 #define POISON_RSP_FLAG_OVERFLOW (1U << 1)
+#define POISON_ERR_SOURCE_MASK   0x7ULL
 
 #define GET_POISON_LIST_USAGE \
 	"get-poison-list --dpa <addr> --length <bytes> [--frestart]"
@@ -182,6 +183,24 @@ int parse_clear_poison_req(
 	return 0;
 }
 
+static const char *poison_error_source_name(uint8_t source)
+{
+	switch (source) {
+	case 0:
+		return "Unknown";
+	case 1:
+		return "External";
+	case 2:
+		return "Internal";
+	case 3:
+		return "Injected";
+	case 7:
+		return "Vendor Specific";
+	default:
+		return "Reserved";
+	}
+}
+
 void print_poison_list(
 	const struct cxlmi_cmd_memdev_get_poison_list_rsp *rsp)
 {
@@ -198,8 +217,14 @@ void print_poison_list(
 	printf("Media Error Record Count:%u\n",
 	       rsp->more_err_media_record_cnt);
 	for (i = 0; i < rsp->more_err_media_record_cnt; i++) {
-		printf("  [%u] DPA=0x%016llx Length=0x%08x\n", i,
-		       (unsigned long long)rsp->records[i].media_err_addr,
+		uint64_t encoded_addr = rsp->records[i].media_err_addr;
+		uint8_t source = encoded_addr & POISON_ERR_SOURCE_MASK;
+		uint64_t dpa = encoded_addr & ~POISON_ERR_SOURCE_MASK;
+
+		printf("  [%u] DPA=0x%016llx ErrorSource=%s (0x%x) "
+		       "Length=0x%08x\n", i,
+		       (unsigned long long)dpa,
+		       poison_error_source_name(source), source,
 		       rsp->records[i].media_err_len);
 	}
 }
