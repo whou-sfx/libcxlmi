@@ -33,6 +33,8 @@ command set, as per the latest specification.
 	* [Get Supported Features (0500h)](#get-supported-features-0500h)
 	* [Get Feature (0501h)](#get-feature-0501h)
 	* [Set Feature (0502h)](#set-feature-0502h)
+* [Performance Maintenance (06h)](#performance-maintenance-06h)
+	* [Perform Maintenance (0600h)](#perform-maintenance-0600h)
 
 <!-- Created by https://github.com/ekalinin/github-markdown-toc -->
 <!-- Added by: dave, at: Tue May 21 04:42:32 PM PDT 2024 -->
@@ -686,4 +688,86 @@ int cxlmi_cmd_set_feature(struct cxlmi_endpoint *ep,
 	struct cxlmi_tunnel_info *ti,
 	struct cxlmi_cmd_set_feature_req *in,
 	size_t feature_data_sz);
+   ```
+
+# Performance Maintenance (06h)
+
+## Perform Maintenance (0600h)
+
+This command instructs the device to perform a maintenance operation identified
+by the given class and subclass. It runs as a background operation; the result
+is retrieved via the Background Operation Status (0002h) command. Certain
+operations (e.g. Memory Sparing, PPR) may produce an event record on
+completion. There is no output payload.
+
+Input payload (generic):
+
+   ```C
+struct cxlmi_cmd_perform_maintenance_req {
+	uint8_t maint_op_class;
+	uint8_t maint_op_subclass;
+	uint8_t params[];
+};
+   ```
+
+### PPR Parameters (Class 01h)
+
+`maint_op_subclass`: `00h` = Soft PPR (sPPR); `01h` = Hard PPR (hPPR).
+
+   ```C
+struct cxlmi_perform_maintenance_ppr_params {
+	uint8_t flags;		/* Bit 0: Query Resources Flag */
+	uint8_t rsvd[2];
+	uint64_t dpa;		/* Device Physical Address to repair */
+	uint8_t nibble_mask[3];	/* Affected nibbles on the memory bus */
+};
+   ```
+
+### MBIST (Media Test) Parameters (Class 03h, Subclass 00h)
+
+   ```C
+struct cxlmi_perform_maintenance_mbist_params {
+	uint8_t action;		/* 00h: full; 01h: start chunk; 02h: continue; 03h: end; 04h: abort */
+	uint32_t offset;	/* Byte offset into Test Parameters (32-byte multiples) */
+	uint8_t rsvd;
+	uint8_t test_params[];	/* Common config (32B) followed by per-test entries (32B each) */
+};
+   ```
+
+Common Configuration Parameters (first 32 bytes of `test_params`):
+
+   ```C
+struct cxlmi_media_test_common_config {
+	uint8_t num_tests;
+	uint64_t start_address;	/* Start DPA for all tests */
+	uint64_t length;	/* Range to test in units of 64 bytes */
+	uint8_t media_test_results_config; /* Bit 0: single error-signature mode */
+	uint8_t config_flags;		   /* Bits[1:0]: ECC disablement */
+	uint8_t rsvd[0xd];
+};
+   ```
+
+Per-test Parameters Entry (32 bytes each, appended after common config):
+
+   ```C
+struct cxlmi_media_test_params_entry {
+	uint16_t test_id;		/* Discovered via Media Test Capability Log */
+	uint8_t num_iterations;
+	uint16_t flags;			/* Bit 0: invert; Bit 1: stop on 1st UCE; Bit 8: auto-poison */
+	uint16_t pattern_type;		/* 00h: user; 01h: vendor; 02h: PRBS; 03h: DPA; 04h: 55h; 05h: AAh */
+	uint8_t pattern_value;		/* Valid when pattern_type == 00h */
+	uint16_t vendor_specific;	/* Valid when pattern_type == 01h */
+	uint32_t prbs_seed;
+	uint16_t error_count_threshold;
+	uint8_t rsvd[0x10];
+};
+   ```
+
+Command name:
+
+   ```C
+int cxlmi_cmd_perform_maintenance(struct cxlmi_endpoint *ep,
+	struct cxlmi_tunnel_info *ti,
+	struct cxlmi_cmd_perform_maintenance_req *in,
+	size_t params_sz);
    ```

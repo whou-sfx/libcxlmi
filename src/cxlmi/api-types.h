@@ -287,6 +287,52 @@ struct cxlmi_cmd_set_feature_req {
 	uint8_t feature_data[];
 } __attribute__((packed));
 
+/* CXL r3.2 Section 8.2.10.7.1: Perform Maintenance (Opcode 0600h) */
+struct cxlmi_cmd_perform_maintenance_req {
+	uint8_t maint_op_class;
+	uint8_t maint_op_subclass;
+	uint8_t params[];
+} __attribute__((packed));
+
+/* PPR Maintenance parameters (Class 01h: sPPR=00h, hPPR=01h) */
+struct cxlmi_perform_maintenance_ppr_params {
+	uint8_t flags;		/* Bit 0: Query Resources Flag */
+	uint8_t rsvd[2];
+	uint64_t dpa;		/* Device Physical Address */
+	uint8_t nibble_mask[3];
+} __attribute__((packed));
+
+/* MBIST (Media Test) Maintenance parameters (Class 03h, Subclass 00h) */
+struct cxlmi_perform_maintenance_mbist_params {
+	uint8_t action;		/* 00h: full; 01h: start chunk; 02h: continue; 03h: end; 04h: abort */
+	uint32_t offset;	/* Offset in Test Parameters data (32-byte multiples) */
+	uint8_t rsvd;
+	uint8_t test_params[];
+} __attribute__((packed));
+
+/* Common Configuration Parameters for Media Test (Table 8-123, 32 bytes) */
+struct cxlmi_media_test_common_config {
+	uint8_t num_tests;
+	uint64_t start_address;
+	uint64_t length;		/* In units of 64 bytes */
+	uint8_t media_test_results_config;
+	uint8_t config_flags;
+	uint8_t rsvd[0xd];
+} __attribute__((packed));
+
+/* Test Parameters Entry for Media Test (Table 8-124, 32 bytes) */
+struct cxlmi_media_test_params_entry {
+	uint16_t test_id;
+	uint8_t num_iterations;
+	uint16_t flags;
+	uint16_t pattern_type;
+	uint8_t pattern_value;
+	uint16_t vendor_specific;
+	uint32_t prbs_seed;
+	uint16_t error_count_threshold;
+	uint8_t rsvd[0x10];
+} __attribute__((packed));
+
 /* CXL r3.1 Section 8.2.9.9.1.1: Identify Memory Device (Opcode 4000h) */
 struct cxlmi_cmd_memdev_identify_rsp {
 	char fw_revision[0x10];

@@ -526,6 +526,14 @@ int cxlmi_cmd_set_feature(struct cxlmi_endpoint *ep,
 	size_t feature_data_sz);
 
 /*
+ * Definitions for Performance Maintenance Commands, per CXL r3.2 Section 8.2.10.7.
+ */
+int cxlmi_cmd_perform_maintenance(struct cxlmi_endpoint *ep,
+	struct cxlmi_tunnel_info *ti,
+	struct cxlmi_cmd_perform_maintenance_req *in,
+	size_t params_sz);
+
+/*
  * Definitions for Memory Device Commands, per CXL r3.1 Table 8-126.
  */
 int cxlmi_cmd_memdev_identify(struct cxlmi_endpoint *ep,

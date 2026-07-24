@@ -997,9 +997,35 @@ CXLMI_EXPORT int cxlmi_cmd_set_feature(struct cxlmi_endpoint *ep,
 	return send_cmd_cci(ep, ti, req, req_sz, rsp, rsp_sz, rsp_sz);
 }
 
+CXLMI_EXPORT int cxlmi_cmd_perform_maintenance(struct cxlmi_endpoint *ep,
+	struct cxlmi_tunnel_info *ti,
+	struct cxlmi_cmd_perform_maintenance_req *in,
+	size_t params_sz)
+{
+	struct cxlmi_cmd_perform_maintenance_req *req_pl;
+	_cleanup_free_ struct cxlmi_cci_msg *req = NULL;
+	struct cxlmi_cci_msg rsp;
+	ssize_t req_sz;
+
+	req_sz = sizeof(*req) + sizeof(*req_pl) + params_sz;
+	req = calloc(1, req_sz);
+	if (!req)
+		return -1;
+
+	arm_cci_request(ep, req, sizeof(*req_pl) + params_sz, MAINTENANCE, PERFORM_MAINTENANCE);
+	req_pl = (struct cxlmi_cmd_perform_maintenance_req *)req->payload;
+
+	req_pl->maint_op_class = in->maint_op_class;
+	req_pl->maint_op_subclass = in->maint_op_subclass;
+	if (params_sz)
+		memcpy(req_pl->params, in->params, params_sz);
+
+	return send_cmd_cci(ep, ti, req, req_sz, &rsp, sizeof(rsp), sizeof(rsp));
+}
+
 CXLMI_EXPORT int cxlmi_cmd_memdev_identify(struct cxlmi_endpoint *ep,
-				   struct cxlmi_tunnel_info *ti,
-				   struct cxlmi_cmd_memdev_identify_rsp *ret)
+			   struct cxlmi_tunnel_info *ti,
+			   struct cxlmi_cmd_memdev_identify_rsp *ret)
 {
 	struct cxlmi_cmd_memdev_identify_rsp *rsp_pl;
 	struct cxlmi_cci_msg req;
