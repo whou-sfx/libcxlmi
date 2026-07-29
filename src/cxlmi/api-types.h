@@ -294,10 +294,13 @@ struct cxlmi_cmd_perform_maintenance_req {
 	uint8_t params[];
 } __attribute__((packed));
 
-/* PPR Maintenance parameters (Class 01h: sPPR=00h, hPPR=01h) */
+/*
+ * PPR Maintenance parameters (Class 01h: sPPR=00h, hPPR=01h).
+ * Offsets below are relative to params[] (i.e. byte 02h of the full payload):
+ *   00h: flags (1B), 01h-08h: dpa (8B), 09h-0Bh: nibble_mask (3B) → 12B total.
+ */
 struct cxlmi_perform_maintenance_ppr_params {
 	uint8_t flags;		/* Bit 0: Query Resources Flag */
-	uint8_t rsvd[2];
 	uint64_t dpa;		/* Device Physical Address */
 	uint8_t nibble_mask[3];
 } __attribute__((packed));

@@ -5620,11 +5620,9 @@ static int sdb_tunnel_pm_ppr(struct cxlmi_endpoint *ep, uint8_t port_id,
 			     int argc, char **argv)
 {
 	struct pm_ppr_args args;
-	struct {
-		struct cxlmi_cmd_perform_maintenance_req hdr;
-		struct cxlmi_perform_maintenance_ppr_params ppr;
-	} __attribute__((packed)) inner_pl;
-	size_t pl_sz = sizeof(inner_pl);
+	struct cxlmi_cmd_perform_maintenance_req *inner_hdr;
+	struct cxlmi_perform_maintenance_ppr_params *ppr;
+	size_t pl_sz  = sizeof(*inner_hdr) + sizeof(*ppr);
 	size_t req_sz = sizeof(struct sdb_tunnel_req_hdr) +
 			sizeof(struct cxlmi_cci_msg) + pl_sz;
 	size_t rsp_sz = sizeof(struct sdb_tunnel_rsp_hdr) +
@@ -5662,13 +5660,14 @@ static int sdb_tunnel_pm_ppr(struct cxlmi_endpoint *ep, uint8_t port_id,
 	req_msg->pl_length[0] = (uint8_t)(pl_sz & 0xff);
 	req_msg->pl_length[1] = (uint8_t)((pl_sz >> 8) & 0xff);
 
-	memset(&inner_pl, 0, sizeof(inner_pl));
-	inner_pl.hdr.maint_op_class    = 0x01; /* PPR */
-	inner_pl.hdr.maint_op_subclass = args.subclass;
-	inner_pl.ppr.flags             = args.flags;
-	inner_pl.ppr.dpa               = args.dpa;
-	memcpy(inner_pl.ppr.nibble_mask, args.nibble_mask, 3);
-	memcpy(req_pl, &inner_pl, pl_sz);
+	inner_hdr = (struct cxlmi_cmd_perform_maintenance_req *)req_pl;
+	inner_hdr->maint_op_class    = 0x01; /* PPR */
+	inner_hdr->maint_op_subclass = args.subclass;
+
+	ppr = (struct cxlmi_perform_maintenance_ppr_params *)inner_hdr->params;
+	ppr->flags = args.flags;
+	ppr->dpa   = args.dpa;
+	memcpy(ppr->nibble_mask, args.nibble_mask, 3);
 
 	memset(&rsp, 0, sizeof(rsp));
 	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", req_buf, req_sz);

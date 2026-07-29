@@ -322,26 +322,33 @@ int parse_pm_mbist_args(int argc, char **argv, struct pm_mbist_args *out)
 static int cmd_pm_ppr(struct cxlmi_endpoint *ep, int argc, char **argv)
 {
 	struct pm_ppr_args args;
-	struct {
-		struct cxlmi_cmd_perform_maintenance_req hdr;
-		struct cxlmi_perform_maintenance_ppr_params ppr;
-	} __attribute__((packed)) req;
+	struct cxlmi_cmd_perform_maintenance_req *req;
+	struct cxlmi_perform_maintenance_ppr_params *ppr;
+	size_t params_sz = sizeof(*ppr);
+	size_t req_sz    = sizeof(*req) + params_sz;
 	int rc;
 
 	rc = parse_pm_ppr_args(argc, argv, &args);
 	if (rc)
 		return rc;
 
-	memset(&req, 0, sizeof(req));
-	req.hdr.maint_op_class    = 0x01; /* PPR */
-	req.hdr.maint_op_subclass = args.subclass;
-	req.ppr.flags             = args.flags;
-	req.ppr.dpa               = args.dpa;
-	memcpy(req.ppr.nibble_mask, args.nibble_mask, 3);
+	req = calloc(1, req_sz);
+	if (!req) {
+		perror("perform-maintenance ppr: calloc");
+		return -1;
+	}
 
-	rc = cxlmi_cmd_perform_maintenance(ep, NULL,
-					   (struct cxlmi_cmd_perform_maintenance_req *)&req,
-					   sizeof(req.ppr));
+	req->maint_op_class    = 0x01; /* PPR */
+	req->maint_op_subclass = args.subclass;
+
+	ppr = (struct cxlmi_perform_maintenance_ppr_params *)req->params;
+	ppr->flags = args.flags;
+	ppr->dpa   = args.dpa;
+	memcpy(ppr->nibble_mask, args.nibble_mask, 3);
+
+	rc = cxlmi_cmd_perform_maintenance(ep, NULL, req, params_sz);
+	free(req);
+
 	if (rc && rc != CXLMI_RET_BACKGROUND) {
 		if (rc > 0)
 			fprintf(stderr,
