@@ -159,6 +159,7 @@ int parse_pm_mbist_args(int argc, char **argv, struct pm_mbist_args *out);
 int cmd_perform_maintenance(struct cxlmi_endpoint *ep, int argc, char **argv);
 
 int cmd_vu_evtadd(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_vu_eccrmwinj(struct cxlmi_endpoint *ep, int argc, char **argv);
 
 struct vu_dlcfg_params {
 	const char *input_file;

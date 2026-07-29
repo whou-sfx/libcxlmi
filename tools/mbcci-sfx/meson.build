@@ -19,6 +19,7 @@ executable(
         'cmd_fm_qos.c',
         'cmd_events.c',
         'cmd_vu_evtadd.c',
+        'cmd_vu_eccrmwinj.c',
         'cmd_vu_dlcfg.c',
         'cmd_vu_getdevcfg.c',
         'cmd_vu_sys_cfg.c',

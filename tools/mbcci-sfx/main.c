@@ -62,6 +62,8 @@ static const struct subcmd subcmds[] = {
 	  "Set Event Interrupt Policy (0103h) --info <h> --warn <h> --failure <h> --fatal <h>" },
 	{ "vu-evtadd",                 cmd_vu_evtadd,
 	  "VU Inject Event (0xCC53/0x0129) --loglvl <0-3> --intfmask <hex> --count <n>" },
+	{ "vu-eccrmwinj",              cmd_vu_eccrmwinj,
+	  "VU ECC RMW Inject (0xCC53/0x011b) --op <1bit|cecc|uecc|clear> --dpa <hex>" },
 	{ "vu-dlcfg",                  cmd_vu_dlcfg,
 	  "VU Download Config (0xCC53/0x07) --input <file> --cfg-type <DEV|DDR> [--chunk-size <n>]" },
 	{ "vu-getdevcfg",              cmd_vu_getdevcfg,
