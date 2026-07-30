@@ -334,6 +334,11 @@ void print_cel_log(const uint8_t *data, size_t len, uint32_t base_offset);
 int cmd_get_timestamp(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_set_timestamp(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+int cmd_get_dc_config(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_get_dc_extent_list(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_add_dc_response(struct cxlmi_endpoint *ep, int argc, char **argv);
+int cmd_release_dc(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv);
 
 void print_qos_telemetry_capability(uint8_t val);
