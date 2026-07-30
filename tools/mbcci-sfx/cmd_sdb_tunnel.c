@@ -5895,6 +5895,1174 @@ static int sdb_tunnel_perform_maintenance(struct cxlmi_endpoint *ep,
 }
 
 /* ------------------------------------------------------------------ */
+/* sdb-tunnel DCD Management (FM API command_set 0x56)               */
+/* ------------------------------------------------------------------ */
+
+#define SDB_DCD_CMD_SET          0x56
+#define SDB_DCD_GET_INFO         0x00
+#define SDB_DCD_GET_REG_CFG      0x01
+#define SDB_DCD_SET_REG_CFG      0x02
+#define SDB_DCD_GET_EXT_LIST     0x03
+#define SDB_DCD_INITIATE_ADD     0x04
+#define SDB_DCD_INITIATE_RELEASE 0x05
+#define SDB_DCD_ADD_REF          0x06
+#define SDB_DCD_REMOVE_REF       0x07
+#define SDB_DCD_LIST_TAGS        0x08
+#define SDB_DCD_MAX_EXTENTS      16
+
+/* Parse a 32-character hex string into a 16-byte tag array. */
+/*
+ * Parse a hex tag string into a 16-byte array.
+ * Accepts an optional "0x"/"0X" prefix and 1–32 hex digits.
+ * Shorter values are right-aligned and left-padded with zeros.
+ */
+static int dcd_parse_hex_tag(const char *arg, uint8_t tag[16])
+{
+	const char *p = arg;
+	char hex[33];
+	char byte_buf[3] = { 0 };
+	size_t len;
+	int i;
+
+	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X'))
+		p += 2;
+
+	len = strlen(p);
+	if (len == 0 || len > 32) {
+		fprintf(stderr, "--tag: expected 1–32 hex chars (got %zu)\n", len);
+		return -1;
+	}
+	for (i = 0; i < (int)len; i++) {
+		char c = p[i];
+
+		if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+		      (c >= 'A' && c <= 'F'))) {
+			fprintf(stderr, "--tag: invalid hex char '%c'\n", c);
+			return -1;
+		}
+	}
+
+	/* Right-align into a 32-char buffer, padding left with '0' */
+	memset(hex, '0', 32);
+	memcpy(hex + 32 - len, p, len);
+	hex[32] = '\0';
+
+	memset(tag, 0, 16);
+	for (i = 0; i < 16; i++) {
+		char *end;
+
+		byte_buf[0] = hex[i * 2];
+		byte_buf[1] = hex[i * 2 + 1];
+		tag[i] = (uint8_t)strtoul(byte_buf, &end, 16);
+	}
+	return 0;
+}
+
+/* Generic uint64 parse (no errno dependency). */
+static int sdb_dcd_parse_u64(const char *s, uint64_t *out, const char *name)
+{
+	char *end;
+
+	*out = strtoull(s, &end, 0);
+	if (end == s || *end != '\0') {
+		fprintf(stderr, "%s: invalid value '%s'\n", name, s);
+		return -1;
+	}
+	return 0;
+}
+
+/*
+ * Parse "--extent <dpa>:<len>[:<tag32>[:<shared_seq>]]".
+ */
+static int dcd_parse_extent_arg(const char *arg,
+				uint64_t *start_dpa, uint64_t *len_out,
+				uint8_t tag[16], uint16_t *shared_seq)
+{
+	char *copy = strdup(arg);
+	char *p, *end;
+	int rc = -1;
+
+	if (!copy) {
+		perror("dcd_parse_extent_arg: strdup");
+		return -1;
+	}
+
+	p = copy;
+	*start_dpa = strtoull(p, &end, 0);
+	if (end == p || *end != ':')
+		goto fail;
+
+	p = end + 1;
+	*len_out = strtoull(p, &end, 0);
+	if (end == p)
+		goto fail;
+
+	memset(tag, 0, 16);
+	*shared_seq = 0;
+
+	if (*end == ':') {
+		p = end + 1;
+		if (strlen(p) >= 32) {
+			char ts[33];
+
+			memcpy(ts, p, 32);
+			ts[32] = '\0';
+			if (dcd_parse_hex_tag(ts, tag))
+				goto fail;
+			p += 32;
+			if (*p == ':') {
+				unsigned long sv;
+
+				p++;
+				sv = strtoul(p, &end, 0);
+				if (end == p)
+					goto fail;
+				*shared_seq = (uint16_t)sv;
+			}
+		}
+	}
+	rc = 0;
+fail:
+	free(copy);
+	if (rc)
+		fprintf(stderr,
+			"--extent: invalid format '%s' (expected dpa:len[:tag32[:seq]])\n",
+			arg);
+	return rc;
+}
+
+static void dcd_print_hex_tag(const uint8_t tag[16])
+{
+	int i;
+
+	for (i = 0; i < 16; i++)
+		printf("%02x", tag[i]);
+}
+
+static void dcd_print_info(const struct cxlmi_cmd_fmapi_get_dcd_info_rsp *r)
+{
+	printf("  Num Hosts:                   %u\n", r->num_hosts);
+	printf("  Num Supported DC Regions:    %u\n", r->num_supported_dc_regions);
+	printf("  Capacity Selection Policies: 0x%04x\n",
+	       le16_to_cpu(r->capacity_selection_policies));
+	printf("  Capacity Removal Policies:   0x%04x\n",
+	       le16_to_cpu(r->capacity_removal_policies));
+	printf("  Sanitize on Rel Cfg Mask:    0x%02x\n",
+	       r->sanitize_on_release_config_mask);
+	printf("  Total Dynamic Capacity:      0x%016llx\n",
+	       (unsigned long long)le64_to_cpu(r->total_dynamic_capacity));
+	printf("  Region Block Size Masks:\n");
+	printf("    [0] 0x%016llx  [1] 0x%016llx\n",
+	       (unsigned long long)le64_to_cpu(r->region_0_supported_blk_sz_mask),
+	       (unsigned long long)le64_to_cpu(r->region_1_supported_blk_sz_mask));
+	printf("    [2] 0x%016llx  [3] 0x%016llx\n",
+	       (unsigned long long)le64_to_cpu(r->region_2_supported_blk_sz_mask),
+	       (unsigned long long)le64_to_cpu(r->region_3_supported_blk_sz_mask));
+	printf("    [4] 0x%016llx  [5] 0x%016llx\n",
+	       (unsigned long long)le64_to_cpu(r->region_4_supported_blk_sz_mask),
+	       (unsigned long long)le64_to_cpu(r->region_5_supported_blk_sz_mask));
+	printf("    [6] 0x%016llx  [7] 0x%016llx\n",
+	       (unsigned long long)le64_to_cpu(r->region_6_supported_blk_sz_mask),
+	       (unsigned long long)le64_to_cpu(r->region_7_supported_blk_sz_mask));
+}
+
+static void dcd_print_region_configs(
+		const struct cxlmi_cmd_fmapi_get_host_dc_region_config_rsp *r)
+{
+	uint8_t i;
+
+	printf("  Host ID:              %u\n", le16_to_cpu(r->host_id));
+	printf("  Num Regions:          %u\n", r->num_regions);
+	printf("  Regions Returned:     %u\n", r->regions_returned);
+	printf("  Extents Supported:    %u\n", le32_to_cpu(r->num_extents_supported));
+	printf("  Extents Available:    %u\n", le32_to_cpu(r->num_extents_available));
+	printf("  Tags Supported:       %u\n", le32_to_cpu(r->num_tags_supported));
+	printf("  Tags Available:       %u\n", le32_to_cpu(r->num_tags_available));
+	for (i = 0; i < r->regions_returned && i < 8; i++) {
+		const typeof(r->region_configs[0]) *rc = &r->region_configs[i];
+
+		printf("  Region[%u]:\n", i);
+		printf("    Base:             0x%016llx\n",
+		       (unsigned long long)le64_to_cpu(rc->base));
+		printf("    Decode Length:    0x%016llx\n",
+		       (unsigned long long)le64_to_cpu(rc->decode_len));
+		printf("    Region Length:    0x%016llx\n",
+		       (unsigned long long)le64_to_cpu(rc->region_len));
+		printf("    Block Size:       0x%016llx\n",
+		       (unsigned long long)le64_to_cpu(rc->block_size));
+		printf("    Flags:            0x%02x\n", rc->flags);
+		printf("    Sanitize on Rel:  0x%02x\n", rc->sanitize_on_release);
+	}
+}
+
+/* 5600h: No input, fixed output */
+static int sdb_tunnel_fm_dcd_get_info(struct cxlmi_endpoint *ep,
+				      int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr              hdr;
+		struct cxlmi_cci_msg                   msg;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr              hdr;
+		struct cxlmi_cci_msg                   msg;
+		struct cxlmi_cmd_fmapi_get_dcd_info_rsp rsp;
+	} __attribute__((packed)) rsp;
+
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel fm-dcd-get-info [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = sizeof(req.msg);
+	req.msg.command      = SDB_DCD_GET_INFO;
+	req.msg.command_set  = SDB_DCD_CMD_SET;
+
+	memset(&rsp, 0, sizeof(rsp));
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-dcd-get-info failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-dcd-get-info ioctl failed\n");
+		return rc;
+	}
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-get-info: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("DCD Info:\n");
+	dcd_print_info(&rsp.rsp);
+	return 0;
+}
+
+/* 5601h: Fixed input (4B), fixed output (340B) */
+static int sdb_tunnel_fm_dcd_get_region_config(struct cxlmi_endpoint *ep,
+					       int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                             hdr;
+		struct cxlmi_cci_msg                                  msg;
+		struct cxlmi_cmd_fmapi_get_host_dc_region_config_req  payload;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr                             hdr;
+		struct cxlmi_cci_msg                                  msg;
+		struct cxlmi_cmd_fmapi_get_host_dc_region_config_rsp  rsp;
+	} __attribute__((packed)) rsp;
+
+	uint16_t host_id = 0;
+	uint8_t region_cnt = 8, start_region_id = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--host-id") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--host-id"))
+				return -1;
+			host_id = (uint16_t)v;
+		} else if (strcmp(argv[i], "--region-cnt") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--region-cnt"))
+				return -1;
+			region_cnt = (uint8_t)v;
+		} else if (strcmp(argv[i], "--start-region-id") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--start-region-id"))
+				return -1;
+			start_region_id = (uint8_t)v;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel fm-dcd-get-region-config"
+				" [--host-id <n>] [--region-cnt <n>]"
+				" [--start-region-id <n>] [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+	req.msg.command      = SDB_DCD_GET_REG_CFG;
+	req.msg.command_set  = SDB_DCD_CMD_SET;
+	req.msg.pl_length[0] = sizeof(req.payload) & 0xff;
+	req.msg.pl_length[1] = (sizeof(req.payload) >> 8) & 0xff;
+	req.payload.host_id         = cpu_to_le16(host_id);
+	req.payload.region_cnt      = region_cnt;
+	req.payload.start_region_id = start_region_id;
+
+	memset(&rsp, 0, sizeof(rsp));
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr,
+				"sdb-tunnel fm-dcd-get-region-config failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel fm-dcd-get-region-config ioctl failed\n");
+		return rc;
+	}
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-get-region-config: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("DC Region Configs:\n");
+	dcd_print_region_configs(&rsp.rsp);
+	return 0;
+}
+
+/* 5602h: Fixed input (16B), no output */
+static int sdb_tunnel_fm_dcd_set_region_config(struct cxlmi_endpoint *ep,
+					       int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                        hdr;
+		struct cxlmi_cci_msg                             msg;
+		struct cxlmi_cmd_fmapi_set_dc_region_config_req  payload;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	uint8_t region_id = 0, sanitize = 0;
+	uint64_t block_sz = 0;
+	int has_region_id = 0, has_block_sz = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--region-id") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--region-id"))
+				return -1;
+			region_id = (uint8_t)v;
+			has_region_id = 1;
+		} else if (strcmp(argv[i], "--block-sz") == 0 && i + 1 < argc) {
+			if (sdb_dcd_parse_u64(argv[++i], &block_sz, "--block-sz"))
+				return -1;
+			has_block_sz = 1;
+		} else if (strcmp(argv[i], "--sanitize-on-release") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--sanitize-on-release"))
+				return -1;
+			sanitize = (uint8_t)v;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel fm-dcd-set-region-config"
+				" --region-id <n> --block-sz <hex>"
+				" [--sanitize-on-release <n>] [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	if (!has_region_id || !has_block_sz) {
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-set-region-config:"
+			" --region-id and --block-sz are required\n");
+		return -1;
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+	req.msg.command      = SDB_DCD_SET_REG_CFG;
+	req.msg.command_set  = SDB_DCD_CMD_SET;
+	req.msg.pl_length[0] = sizeof(req.payload) & 0xff;
+	req.msg.pl_length[1] = (sizeof(req.payload) >> 8) & 0xff;
+	req.payload.region_id            = region_id;
+	req.payload.block_sz             = cpu_to_le64(block_sz);
+	req.payload.sanitize_on_release  = sanitize;
+
+	memset(&rsp, 0, sizeof(rsp));
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr,
+				"sdb-tunnel fm-dcd-set-region-config failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr,
+				"sdb-tunnel fm-dcd-set-region-config ioctl failed\n");
+		return rc;
+	}
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-set-region-config: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("DC Region Config set OK (region_id=%u)\n", region_id);
+	return 0;
+}
+
+/* 5603h: Fixed input (12B), variable output (header + extents[]) */
+static int sdb_tunnel_fm_dcd_get_ext_list(struct cxlmi_endpoint *ep,
+					  int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                          hdr;
+		struct cxlmi_cci_msg                               msg;
+		struct cxlmi_cmd_fmapi_get_dc_region_ext_list_req  payload;
+	} __attribute__((packed)) req;
+
+	struct cxlmi_cmd_fmapi_get_dc_region_ext_list_rsp dummy;
+	size_t rsp_sz;
+	uint8_t *rsp_buf = NULL;
+	struct sdb_tunnel_rsp_hdr *rsp_hdr;
+	struct cxlmi_cci_msg *rsp_msg;
+	struct cxlmi_cmd_fmapi_get_dc_region_ext_list_rsp *rsp_pl;
+
+	uint16_t host_id = 0;
+	uint32_t extent_count = 16, start_ext_index = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--host-id") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--host-id"))
+				return -1;
+			host_id = (uint16_t)v;
+		} else if (strcmp(argv[i], "--extent-count") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--extent-count"))
+				return -1;
+			extent_count = (uint32_t)v;
+		} else if (strcmp(argv[i], "--start-ext-index") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--start-ext-index"))
+				return -1;
+			start_ext_index = (uint32_t)v;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel fm-dcd-get-ext-list"
+				" [--host-id <n>] [--extent-count <n>]"
+				" [--start-ext-index <n>] [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	rsp_sz = sizeof(*rsp_hdr) + sizeof(*rsp_msg) + sizeof(dummy) +
+		 (size_t)extent_count * sizeof(dummy.extents[0]);
+	rsp_buf = calloc(1, rsp_sz);
+	if (!rsp_buf) {
+		perror("sdb-tunnel fm-dcd-get-ext-list: calloc");
+		return -1;
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+	req.msg.command      = SDB_DCD_GET_EXT_LIST;
+	req.msg.command_set  = SDB_DCD_CMD_SET;
+	req.msg.pl_length[0] = sizeof(req.payload) & 0xff;
+	req.msg.pl_length[1] = (sizeof(req.payload) >> 8) & 0xff;
+	req.payload.host_id         = cpu_to_le16(host_id);
+	req.payload.extent_count    = cpu_to_le32(extent_count);
+	req.payload.start_ext_index = cpu_to_le32(start_ext_index);
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       rsp_buf, rsp_sz);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-dcd-get-ext-list failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-dcd-get-ext-list ioctl failed\n");
+		free(rsp_buf);
+		return rc;
+	}
+	dump_hex("sdb-tunnel RX", rsp_buf, rsp_sz);
+
+	rsp_hdr = (struct sdb_tunnel_rsp_hdr *)rsp_buf;
+	rsp_msg = (struct cxlmi_cci_msg *)(rsp_buf + sizeof(*rsp_hdr));
+	rsp_pl  = (struct cxlmi_cmd_fmapi_get_dc_region_ext_list_rsp *)
+		  (rsp_buf + sizeof(*rsp_hdr) + sizeof(*rsp_msg));
+	(void)rsp_hdr;
+
+	if (rsp_msg->return_code != 0) {
+		uint16_t cci_rc = rsp_msg->return_code;
+
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-get-ext-list: inner CCI error 0x%04x\n",
+			cci_rc);
+		free(rsp_buf);
+		return (int)cci_rc;
+	}
+
+	{
+		uint32_t n = le32_to_cpu(rsp_pl->extents_returned);
+		uint32_t j;
+
+		printf("DC Extent List:\n");
+		printf("  Host ID:          %u\n", le16_to_cpu(rsp_pl->host_id));
+		printf("  Start Ext Index:  %u\n", le32_to_cpu(rsp_pl->start_ext_index));
+		printf("  Extents Returned: %u\n", n);
+		printf("  Total Extents:    %u\n", le32_to_cpu(rsp_pl->total_extents));
+		printf("  Generation Num:   %u\n", le32_to_cpu(rsp_pl->list_generation_num));
+		for (j = 0; j < n; j++) {
+			const typeof(rsp_pl->extents[0]) *e = &rsp_pl->extents[j];
+
+			printf("  [%u] DPA=0x%016llx Len=0x%016llx Tag=",
+			       j,
+			       (unsigned long long)le64_to_cpu(e->start_dpa),
+			       (unsigned long long)le64_to_cpu(e->len));
+			dcd_print_hex_tag(e->tag);
+			printf(" SharedSeq=%u\n", le16_to_cpu(e->shared_seq));
+		}
+	}
+
+	free(rsp_buf);
+	return 0;
+}
+
+/* 5604h: Variable input (header + extents[]), no output */
+static int sdb_tunnel_fm_dcd_initiate_add(struct cxlmi_endpoint *ep,
+					  int argc, char **argv)
+{
+	struct cxlmi_cmd_fmapi_initiate_dc_add_req *pl;
+	size_t req_sz, pl_sz;
+	uint8_t *req_buf = NULL;
+	struct sdb_tunnel_req_hdr *req_hdr;
+	struct cxlmi_cci_msg      *req_msg;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	struct {
+		uint64_t start_dpa, len;
+		uint8_t  tag[16];
+		uint16_t shared_seq;
+	} extents[SDB_DCD_MAX_EXTENTS];
+	uint32_t ext_count = 0;
+
+	uint16_t host_id = 0;
+	uint8_t  selection_policy = 1, region_num = 0;
+	uint64_t length = 0;
+	uint8_t  tag[16] = { 0 };
+	uint8_t  port_id = 0;
+	int has_host_id = 0, has_length = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--host-id") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--host-id"))
+				return -1;
+			host_id = (uint16_t)v;
+			has_host_id = 1;
+		} else if (strcmp(argv[i], "--selection-policy") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--selection-policy"))
+				return -1;
+			selection_policy = (uint8_t)v;
+		} else if (strcmp(argv[i], "--region-num") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--region-num"))
+				return -1;
+			region_num = (uint8_t)v;
+		} else if (strcmp(argv[i], "--length") == 0 && i + 1 < argc) {
+			if (sdb_dcd_parse_u64(argv[++i], &length, "--length"))
+				return -1;
+			has_length = 1;
+		} else if (strcmp(argv[i], "--tag") == 0 && i + 1 < argc) {
+			if (dcd_parse_hex_tag(argv[++i], tag))
+				return -1;
+		} else if (strcmp(argv[i], "--extent") == 0 && i + 1 < argc) {
+			if (ext_count >= SDB_DCD_MAX_EXTENTS) {
+				fprintf(stderr, "--extent: too many (max %d)\n",
+					SDB_DCD_MAX_EXTENTS);
+				return -1;
+			}
+			if (dcd_parse_extent_arg(argv[++i],
+						 &extents[ext_count].start_dpa,
+						 &extents[ext_count].len,
+						 extents[ext_count].tag,
+						 &extents[ext_count].shared_seq))
+				return -1;
+			ext_count++;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel fm-dcd-initiate-add"
+				" --host-id <n> --length <hex>"
+				" [--tag <hex>] [--selection-policy <n> (default=1)] [--region-num <n>]"
+				" [--extent <dpa>:<len>[:<tag>[:<seq>]]] ..."
+				" [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	if (!has_host_id || !has_length) {
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-initiate-add:"
+			" --host-id and --length are required\n");
+		return -1;
+	}
+
+	pl_sz  = sizeof(*pl) + ext_count * sizeof(pl->extents[0]);
+	req_sz = sizeof(struct sdb_tunnel_req_hdr) +
+		 sizeof(struct cxlmi_cci_msg) + pl_sz;
+	req_buf = calloc(1, req_sz);
+	if (!req_buf) {
+		perror("sdb-tunnel fm-dcd-initiate-add: calloc");
+		return -1;
+	}
+
+	req_hdr = (struct sdb_tunnel_req_hdr *)req_buf;
+	req_msg = (struct cxlmi_cci_msg *)(req_buf + sizeof(*req_hdr));
+	pl      = (struct cxlmi_cmd_fmapi_initiate_dc_add_req *)
+		  (req_buf + sizeof(*req_hdr) + sizeof(*req_msg));
+
+	req_hdr->id           = port_id;
+	req_hdr->target_type  = 0;
+	req_hdr->command_size = (uint16_t)(sizeof(*req_msg) + pl_sz);
+	req_msg->command      = SDB_DCD_INITIATE_ADD;
+	req_msg->command_set  = SDB_DCD_CMD_SET;
+	req_msg->pl_length[0] = pl_sz & 0xff;
+	req_msg->pl_length[1] = (pl_sz >> 8) & 0xff;
+
+	pl->host_id          = cpu_to_le16(host_id);
+	pl->selection_policy = selection_policy;
+	pl->region_num       = region_num;
+	pl->length           = cpu_to_le64(length);
+	memcpy(pl->tag, tag, 16);
+	pl->ext_count        = cpu_to_le32(ext_count);
+	for (i = 0; i < (int)ext_count; i++) {
+		pl->extents[i].start_dpa  = cpu_to_le64(extents[i].start_dpa);
+		pl->extents[i].len        = cpu_to_le64(extents[i].len);
+		memcpy(pl->extents[i].tag, extents[i].tag, 16);
+		pl->extents[i].shared_seq = cpu_to_le16(extents[i].shared_seq);
+	}
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", req_buf, req_sz);
+
+	memset(&rsp, 0, sizeof(rsp));
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       req_buf, req_sz,
+				       &rsp, sizeof(rsp));
+	free(req_buf);
+
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-dcd-initiate-add failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-dcd-initiate-add ioctl failed\n");
+		return rc;
+	}
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-initiate-add: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("Initiate DC Add OK (host_id=%u ext_count=%u)\n", host_id, ext_count);
+	return 0;
+}
+
+/* 5605h: Variable input (header + extents[]), no output */
+static int sdb_tunnel_fm_dcd_initiate_release(struct cxlmi_endpoint *ep,
+					      int argc, char **argv)
+{
+	struct cxlmi_cmd_fmapi_initiate_dc_release_req *pl;
+	size_t req_sz, pl_sz;
+	uint8_t *req_buf = NULL;
+	struct sdb_tunnel_req_hdr *req_hdr;
+	struct cxlmi_cci_msg      *req_msg;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	struct {
+		uint64_t start_dpa, len;
+		uint8_t  tag[16];
+		uint16_t shared_seq;
+	} extents[SDB_DCD_MAX_EXTENTS];
+	uint32_t ext_count = 0;
+
+	uint16_t host_id = 0;
+	uint8_t  flags = 0;
+	uint64_t length = 0;
+	uint8_t  tag[16] = { 0 };
+	uint8_t  port_id = 0;
+	int has_host_id = 0, has_length = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--host-id") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--host-id"))
+				return -1;
+			host_id = (uint16_t)v;
+			has_host_id = 1;
+		} else if (strcmp(argv[i], "--flags") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--flags"))
+				return -1;
+			flags = (uint8_t)v;
+		} else if (strcmp(argv[i], "--length") == 0 && i + 1 < argc) {
+			if (sdb_dcd_parse_u64(argv[++i], &length, "--length"))
+				return -1;
+			has_length = 1;
+		} else if (strcmp(argv[i], "--tag") == 0 && i + 1 < argc) {
+			if (dcd_parse_hex_tag(argv[++i], tag))
+				return -1;
+		} else if (strcmp(argv[i], "--extent") == 0 && i + 1 < argc) {
+			if (ext_count >= SDB_DCD_MAX_EXTENTS) {
+				fprintf(stderr, "--extent: too many (max %d)\n",
+					SDB_DCD_MAX_EXTENTS);
+				return -1;
+			}
+			if (dcd_parse_extent_arg(argv[++i],
+						 &extents[ext_count].start_dpa,
+						 &extents[ext_count].len,
+						 extents[ext_count].tag,
+						 &extents[ext_count].shared_seq))
+				return -1;
+			ext_count++;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel fm-dcd-initiate-release"
+				" --host-id <n> --length <hex>"
+				" [--tag <hex>] [--flags <n>]"
+				" [--extent <dpa>:<len>[:<tag>[:<seq>]]] ..."
+				" [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	if (!has_host_id || !has_length) {
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-initiate-release:"
+			" --host-id and --length are required\n");
+		return -1;
+	}
+
+	pl_sz  = sizeof(*pl) + ext_count * sizeof(pl->extents[0]);
+	req_sz = sizeof(struct sdb_tunnel_req_hdr) +
+		 sizeof(struct cxlmi_cci_msg) + pl_sz;
+	req_buf = calloc(1, req_sz);
+	if (!req_buf) {
+		perror("sdb-tunnel fm-dcd-initiate-release: calloc");
+		return -1;
+	}
+
+	req_hdr = (struct sdb_tunnel_req_hdr *)req_buf;
+	req_msg = (struct cxlmi_cci_msg *)(req_buf + sizeof(*req_hdr));
+	pl      = (struct cxlmi_cmd_fmapi_initiate_dc_release_req *)
+		  (req_buf + sizeof(*req_hdr) + sizeof(*req_msg));
+
+	req_hdr->id           = port_id;
+	req_hdr->target_type  = 0;
+	req_hdr->command_size = (uint16_t)(sizeof(*req_msg) + pl_sz);
+	req_msg->command      = SDB_DCD_INITIATE_RELEASE;
+	req_msg->command_set  = SDB_DCD_CMD_SET;
+	req_msg->pl_length[0] = pl_sz & 0xff;
+	req_msg->pl_length[1] = (pl_sz >> 8) & 0xff;
+
+	pl->host_id   = cpu_to_le16(host_id);
+	pl->flags     = flags;
+	pl->length    = cpu_to_le64(length);
+	memcpy(pl->tag, tag, 16);
+	pl->ext_count = cpu_to_le32(ext_count);
+	for (i = 0; i < (int)ext_count; i++) {
+		pl->extents[i].start_dpa  = cpu_to_le64(extents[i].start_dpa);
+		pl->extents[i].len        = cpu_to_le64(extents[i].len);
+		memcpy(pl->extents[i].tag, extents[i].tag, 16);
+		pl->extents[i].shared_seq = cpu_to_le16(extents[i].shared_seq);
+	}
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", req_buf, req_sz);
+
+	memset(&rsp, 0, sizeof(rsp));
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       req_buf, req_sz,
+				       &rsp, sizeof(rsp));
+	free(req_buf);
+
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-dcd-initiate-release failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-dcd-initiate-release ioctl failed\n");
+		return rc;
+	}
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-initiate-release: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("Initiate DC Release OK (host_id=%u ext_count=%u)\n", host_id, ext_count);
+	return 0;
+}
+
+/* 5606h: Fixed input (16B tag), no output */
+static int sdb_tunnel_fm_dcd_add_reference(struct cxlmi_endpoint *ep,
+					   int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr              hdr;
+		struct cxlmi_cci_msg                   msg;
+		struct cxlmi_cmd_fmapi_dc_add_ref_req  payload;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	int has_tag = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	memset(&req, 0, sizeof(req));
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--tag") == 0 && i + 1 < argc) {
+			if (dcd_parse_hex_tag(argv[++i], req.payload.tag))
+				return -1;
+			has_tag = 1;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel fm-dcd-add-reference"
+				" --tag <32hex> [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	if (!has_tag) {
+		fprintf(stderr, "sdb-tunnel fm-dcd-add-reference: --tag required\n");
+		return -1;
+	}
+
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+	req.msg.command      = SDB_DCD_ADD_REF;
+	req.msg.command_set  = SDB_DCD_CMD_SET;
+	req.msg.pl_length[0] = sizeof(req.payload) & 0xff;
+	req.msg.pl_length[1] = (sizeof(req.payload) >> 8) & 0xff;
+
+	memset(&rsp, 0, sizeof(rsp));
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-dcd-add-reference failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-dcd-add-reference ioctl failed\n");
+		return rc;
+	}
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-add-reference: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("DC Add Reference OK\n");
+	return 0;
+}
+
+/* 5607h: Fixed input (16B tag), no output */
+static int sdb_tunnel_fm_dcd_remove_reference(struct cxlmi_endpoint *ep,
+					      int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                 hdr;
+		struct cxlmi_cci_msg                      msg;
+		struct cxlmi_cmd_fmapi_dc_remove_ref_req  payload;
+	} __attribute__((packed)) req;
+
+	struct {
+		struct sdb_tunnel_rsp_hdr hdr;
+		struct cxlmi_cci_msg      msg;
+	} __attribute__((packed)) rsp;
+
+	int has_tag = 0;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	memset(&req, 0, sizeof(req));
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--tag") == 0 && i + 1 < argc) {
+			if (dcd_parse_hex_tag(argv[++i], req.payload.tag))
+				return -1;
+			has_tag = 1;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel fm-dcd-remove-reference"
+				" --tag <32hex> [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	if (!has_tag) {
+		fprintf(stderr, "sdb-tunnel fm-dcd-remove-reference: --tag required\n");
+		return -1;
+	}
+
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+	req.msg.command      = SDB_DCD_REMOVE_REF;
+	req.msg.command_set  = SDB_DCD_CMD_SET;
+	req.msg.pl_length[0] = sizeof(req.payload) & 0xff;
+	req.msg.pl_length[1] = (sizeof(req.payload) >> 8) & 0xff;
+
+	memset(&rsp, 0, sizeof(rsp));
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       &rsp, sizeof(rsp));
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-dcd-remove-reference failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-dcd-remove-reference ioctl failed\n");
+		return rc;
+	}
+	dump_hex("sdb-tunnel RX", &rsp, sizeof(rsp));
+
+	if (rsp.msg.return_code != 0) {
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-remove-reference: inner CCI error 0x%04x\n",
+			rsp.msg.return_code);
+		return (int)rsp.msg.return_code;
+	}
+
+	printf("DC Remove Reference OK\n");
+	return 0;
+}
+
+/* 5608h: Fixed input (8B), variable output (header + tags[]) */
+static int sdb_tunnel_fm_dcd_list_tags(struct cxlmi_endpoint *ep,
+				       int argc, char **argv)
+{
+	struct {
+		struct sdb_tunnel_req_hdr                hdr;
+		struct cxlmi_cci_msg                     msg;
+		struct cxlmi_cmd_fmapi_dc_list_tags_req  payload;
+	} __attribute__((packed)) req;
+
+	struct cxlmi_cmd_fmapi_dc_list_tags_rsp dummy;
+	size_t rsp_sz;
+	uint8_t *rsp_buf = NULL;
+	struct sdb_tunnel_rsp_hdr *rsp_hdr;
+	struct cxlmi_cci_msg *rsp_msg;
+	struct cxlmi_cmd_fmapi_dc_list_tags_rsp *rsp_pl;
+
+	uint32_t start_idx = 0, tags_count = 16;
+	uint8_t port_id = 0;
+	int rc, i;
+
+	for (i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
+			rc = parse_port_id(argv[++i]);
+			if (rc < 0)
+				return -1;
+			port_id = (uint8_t)rc;
+		} else if (strcmp(argv[i], "--start-idx") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--start-idx"))
+				return -1;
+			start_idx = (uint32_t)v;
+		} else if (strcmp(argv[i], "--tags-count") == 0 && i + 1 < argc) {
+			uint64_t v;
+			if (sdb_dcd_parse_u64(argv[++i], &v, "--tags-count"))
+				return -1;
+			tags_count = (uint32_t)v;
+		} else {
+			fprintf(stderr,
+				"Usage: sdb-tunnel fm-dcd-list-tags"
+				" [--start-idx <n>] [--tags-count <n>]"
+				" [--port <vdm0|vdm1|i3c>]\n");
+			return -1;
+		}
+	}
+
+	rsp_sz = sizeof(*rsp_hdr) + sizeof(*rsp_msg) + sizeof(dummy) +
+		 (size_t)tags_count * sizeof(dummy.tags_list[0]);
+	rsp_buf = calloc(1, rsp_sz);
+	if (!rsp_buf) {
+		perror("sdb-tunnel fm-dcd-list-tags: calloc");
+		return -1;
+	}
+
+	memset(&req, 0, sizeof(req));
+	req.hdr.id           = port_id;
+	req.hdr.target_type  = 0;
+	req.hdr.command_size = (uint16_t)(sizeof(req.msg) + sizeof(req.payload));
+	req.msg.command      = SDB_DCD_LIST_TAGS;
+	req.msg.command_set  = SDB_DCD_CMD_SET;
+	req.msg.pl_length[0] = sizeof(req.payload) & 0xff;
+	req.msg.pl_length[1] = (sizeof(req.payload) >> 8) & 0xff;
+	req.payload.start_idx  = cpu_to_le32(start_idx);
+	req.payload.tags_count = cpu_to_le32(tags_count);
+
+	dump_hex("sdb-tunnel TX (opcode=0xCCCC)", &req, sizeof(req));
+
+	rc = cxlmi_cmd_vendor_specific(ep, NULL, SDB_TUNNEL_OPCODE,
+				       &req, sizeof(req),
+				       rsp_buf, rsp_sz);
+	if (rc) {
+		if (rc > 0)
+			fprintf(stderr, "sdb-tunnel fm-dcd-list-tags failed: %s\n",
+				cxlmi_cmd_retcode_tostr(rc));
+		else
+			fprintf(stderr, "sdb-tunnel fm-dcd-list-tags ioctl failed\n");
+		free(rsp_buf);
+		return rc;
+	}
+	dump_hex("sdb-tunnel RX", rsp_buf, rsp_sz);
+
+	rsp_hdr = (struct sdb_tunnel_rsp_hdr *)rsp_buf;
+	rsp_msg = (struct cxlmi_cci_msg *)(rsp_buf + sizeof(*rsp_hdr));
+	rsp_pl  = (struct cxlmi_cmd_fmapi_dc_list_tags_rsp *)
+		  (rsp_buf + sizeof(*rsp_hdr) + sizeof(*rsp_msg));
+	(void)rsp_hdr;
+
+	if (rsp_msg->return_code != 0) {
+		uint16_t cci_rc = rsp_msg->return_code;
+
+		fprintf(stderr,
+			"sdb-tunnel fm-dcd-list-tags: inner CCI error 0x%04x\n",
+			cci_rc);
+		free(rsp_buf);
+		return (int)cci_rc;
+	}
+
+	{
+		uint32_t n = le32_to_cpu(rsp_pl->num_tags_returned);
+		uint32_t j;
+
+		printf("DC Tag List:\n");
+		printf("  Generation Num:   %u\n", le32_to_cpu(rsp_pl->generation_num));
+		printf("  Total Num Tags:   %u\n", le32_to_cpu(rsp_pl->total_num_tags));
+		printf("  Tags Returned:    %u\n", n);
+		printf("  Validity Bitmap:  0x%02x\n", rsp_pl->validity_bitmap);
+		for (j = 0; j < n; j++) {
+			const typeof(rsp_pl->tags_list[0]) *t = &rsp_pl->tags_list[j];
+
+			printf("  [%u] Tag=", j);
+			dcd_print_hex_tag(t->tag);
+			printf(" Flags=0x%02x\n", t->flags);
+		}
+	}
+
+	free(rsp_buf);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Dispatcher                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -6085,6 +7253,24 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		return sdb_tunnel_set_timestamp(ep, argc - 2, argv + 2);
 	if (strcmp(argv[1], "perform-maintenance") == 0)
 		return sdb_tunnel_perform_maintenance(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-dcd-get-info") == 0)
+		return sdb_tunnel_fm_dcd_get_info(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-dcd-get-region-config") == 0)
+		return sdb_tunnel_fm_dcd_get_region_config(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-dcd-set-region-config") == 0)
+		return sdb_tunnel_fm_dcd_set_region_config(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-dcd-get-ext-list") == 0)
+		return sdb_tunnel_fm_dcd_get_ext_list(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-dcd-initiate-add") == 0)
+		return sdb_tunnel_fm_dcd_initiate_add(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-dcd-initiate-release") == 0)
+		return sdb_tunnel_fm_dcd_initiate_release(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-dcd-add-reference") == 0)
+		return sdb_tunnel_fm_dcd_add_reference(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-dcd-remove-reference") == 0)
+		return sdb_tunnel_fm_dcd_remove_reference(ep, argc - 2, argv + 2);
+	if (strcmp(argv[1], "fm-dcd-list-tags") == 0)
+		return sdb_tunnel_fm_dcd_list_tags(ep, argc - 2, argv + 2);
 
 	fprintf(stderr, "sdb-tunnel: unknown cci-cmd '%s'\n", argv[1]);
 	fprintf(stderr,
@@ -6092,6 +7278,9 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 		" get-event-records, clear-event-records,"
 		" get-mctp-evt-int-policy, set-mctp-evt-int-policy,"
 		" get-timestamp, set-timestamp,"
-		" perform-maintenance\n");
+		" perform-maintenance,"
+		" fm-dcd-get-info, fm-dcd-get-region-config, fm-dcd-set-region-config,"
+		" fm-dcd-get-ext-list, fm-dcd-initiate-add, fm-dcd-initiate-release,"
+		" fm-dcd-add-reference, fm-dcd-remove-reference, fm-dcd-list-tags\n");
 	return -1;
 }
