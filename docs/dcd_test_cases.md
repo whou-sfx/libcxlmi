@@ -170,12 +170,16 @@ sequenceDiagram
 
 ## Case 3：DCD Shared Access
 
-此场景描述 FM 使用 Prescriptive 策略为 LD0 分配容量并打 tag，添加 FM 引用后，以 Enable Shared Access 策略（`selection-policy=3`）将同一容量共享给 LD1，随后完成 LD0 释放、FM force-release LD1 及移除引用的完整流程。
+此场景描述 FM 使用 Prescriptive 策略为 LD0 分配容量并打 tag，可选地添加 FM 引用以持有容量，再以 Enable Shared Access 策略（`selection-policy=3`）将同一容量共享给 LD1。随后完成 LD0 释放（reference 保障容量不被回收）、FM force-release LD1 及移除引用的完整流程。
 
 **前置条件**（运行时自动检测，不满足则 SKIP）：
 - Region 0 的 Flags bit 3 = `0x08`（Sharable）
 
-> **注意**：CXL 3.2 规范中 `fm-dcd-get-info` 的 `Capacity Selection Policies` bits\[3:0\] 定义为 Free/Contiguous/Prescriptive（bit 0-2），**bit 3 为保留位（Must be 0）**。"Enable Shared Access" 策略（selection-policy=3）并不在此位域内体现，判断共享能力的唯一依据是 Region Flags 的 Sharable 位。
+> **注意**：CXL 3.2 规范中 `fm-dcd-get-info` 的 `Capacity Selection Policies` bits\[3:0\] 定义为 Free / Contiguous / Prescriptive（bit 0–2），**bit 3 为保留位（Must be 0）**。"Enable Shared Access" 策略（selection-policy=3）不在此位域内体现，判断共享能力的唯一依据是 Region Flags 的 Sharable 位。
+
+**tag 传递规则**：
+- Prescriptive（step 4）：顶层 header tag 字段为 reserved，tag 通过 `--extent DPA:LEN:TAG` 的 per-extent tag 携带
+- Enable Shared Access（step 11）：tag 通过顶层 `--tag` 参数（header tag 字段）携带，且须与 step 4 的 tag 完全一致
 
 测试工具：`tests/mbcci-sfx-dcd-share-tests.sh`
 
@@ -189,22 +193,22 @@ sequenceDiagram
     Note over FM,LD1: 初始化：清空 LD0 和 FM 两侧所有遗留 DCD events
 
     FM->>Dev: fm-dcd-get-region-config (5601h)<br/>--host-id 0 --region-cnt 2<br/>awk 提取 Region[0].Base → REGION_DPA<br/>bash 检查 Flags bit3 (Sharable=0x08)
-    Dev-->>FM: Region[0]: Base=REGION_DPA, Flags=0x0x
-    Note over FM: bit3=1 (Sharable) → 继续<br/>否则 SKIP 退出
+    Dev-->>FM: Region[0]: Base=REGION_DPA, Flags=0xXX
+    Note over FM: Flags bit3=1 → Sharable，继续<br/>否则 SKIP 退出
 
     FM->>Dev: fm-dcd-get-info (5600h)<br/>获取设备容量信息（仅展示，不做策略门控）<br/>注：Capacity Selection Policies bit3 为保留位
     Dev-->>FM: DCD Info（总容量、Block Size、支持策略等）
 
-    FM->>Dev: fm-dcd-list-tags (5608h)<br/>基准检查（当前无已分配 tag）
-    Dev-->>FM: 空 tag 列表
+    FM->>Dev: fm-dcd-list-tags (5608h)<br/>基准检查（记录当前 tag 列表）
+    Dev-->>FM: Tag 列表（预期为空）
 
-    FM->>Dev: fm-dcd-initiate-add (5604h)<br/>--host-id 0 --selection-policy 2 (Prescriptive)<br/>--tag DCD_TAG --extent REGION_DPA:0x10000000
+    FM->>Dev: fm-dcd-initiate-add (5604h)<br/>--host-id 0 --selection-policy 2 (Prescriptive)<br/>--extent REGION_DPA:0x10000000:DCD_TAG<br/>（Prescriptive：tag 在 per-extent 字段，header tag 为 reserved）
     Dev-->>FM: Success
-    Note over Dev: LD0 Extent 进入 Pending<br/>DPA = REGION_DPA (FM 已指定，无需解析)
+    Note over Dev: LD0 Extent 进入 Pending<br/>DPA = REGION_DPA（FM 已指定，无需事件解析）
 
     Dev-)LD0: DC Event Log: Add Capacity (type=00h)<br/>DPA = REGION_DPA
 
-    LD0->>Dev: get-event-records --log dcd (0100h)<br/>读取 DCD events（清除 handles）
+    LD0->>Dev: get-event-records --log dcd (0100h)<br/>读取 DCD events，清除 handles
     Dev-->>LD0: Add Capacity 事件
     LD0->>Dev: clear-event-records --log dcd --handle H1 ...
 
@@ -228,16 +232,16 @@ sequenceDiagram
     Dev-->>FM: Tag list（含 DCD_TAG）
 
     Note over FM,LD1: ── 可选步骤（--skip-reference 跳过）──
-    FM->>Dev: fm-dcd-add-reference (5606h)<br/>--tag DCD_TAG<br/>（持有引用防止容量在 LD0 释放后被回收/擦除）
+    FM->>Dev: fm-dcd-add-reference (5606h)<br/>--tag DCD_TAG<br/>（持有引用：LD0 释放后容量不被回收/擦除）
     Dev-->>FM: Success
 
     Note over FM,LD1: ── LD1 Enable Shared Access Add ──
-    FM->>Dev: fm-dcd-initiate-add (5604h)<br/>--host-id 1 --selection-policy 3 (Enable Shared Access)<br/>--tag DCD_TAG<br/>（Tag 必须与 LD0 步骤一致；Region 需为 Sharable）
+    FM->>Dev: fm-dcd-initiate-add (5604h)<br/>--host-id 1 --selection-policy 3 (Enable Shared Access)<br/>--tag DCD_TAG<br/>（Enable Shared Access：tag 在顶层 header 字段；Region 需为 Sharable）
     Dev-->>FM: Success
-    Note over Dev: LD1 获得 Shared Access<br/>（设备可能自动标记为 Added）
+    Note over Dev: LD1 Extent 进入 Pending<br/>（Enable Shared Access 模式下设备可能自动 Added）
 
-    FM->>Dev: fm-dcd-get-ext-list (5603h)<br/>--host-id 1 检查 LD1 extent 可见性
-    Dev-->>FM: LD1 Extent list
+    FM->>Dev: fm-dcd-get-ext-list (5603h)<br/>--host-id 1（信息展示；LD1 未确认则 Pending 不可见）
+    Dev-->>FM: 可能为空或含 LD1 Extent（视设备实现）
 
     Note over FM,LD1: ── LD0 Prescriptive Release ──
     FM->>Dev: fm-dcd-initiate-release (5605h)<br/>--host-id 0 --flags 0x01 (Prescriptive)<br/>--extent REGION_DPA:0x10000000
@@ -251,17 +255,17 @@ sequenceDiagram
 
     LD0->>Dev: dcd-release (4803h)<br/>--extent REGION_DPA:0x10000000
     Dev-->>LD0: Success
-    Note over Dev: LD0 解除映射<br/>容量因 FM reference（或 LD1 映射）保留
+    Note over Dev: LD0 解除映射<br/>FM reference 持有容量，不会被回收
 
     Dev-)FM: DC Event Log: Release Response<br/>（若 FM event log 已满则可能丢失 → 仅 warn）
 
     FM->>Dev: sdb-tunnel get-event-records --log dcd (0100h)<br/>读取 FM Release 事件（若有），清除 handles
     Dev-->>FM: Release Response（若 log 未满）
 
-    FM->>Dev: fm-dcd-get-ext-list (5603h)<br/>--host-id 1（仅展示，LD1 Pending 不可见）
-    Dev-->>FM: 可能为空（LD1 未确认 Add Response）
+    FM->>Dev: fm-dcd-get-ext-list (5603h)<br/>--host-id 1（信息展示；LD1 仍 Pending → 不在列表中）
+    Dev-->>FM: 可能为空
 
-    FM->>Dev: fm-dcd-list-tags (5608h)<br/>验证 tag 仍存在（reference 持有容量）
+    FM->>Dev: fm-dcd-list-tags (5608h)<br/>验证 tag 仍存在（reference 持有容量）<br/>（仅在 --skip-reference 未启用时执行）
     Dev-->>FM: Tag list（含 DCD_TAG）
 
     Note over FM,LD1: ── FM Force Release LD1 ──
@@ -284,12 +288,15 @@ sequenceDiagram
 | 步骤 | 校验内容 |
 |------|---------|
 | 步骤 1 | Region[0].Flags bit3 = `0x08`（Sharable）；否则 SKIP |
-| 步骤 2 | `fm-dcd-get-info` 命令执行成功（仅展示，无门控条件） |
+| 步骤 2 | `fm-dcd-get-info` 执行成功（仅展示，无门控条件） |
+| 步骤 4 | Prescriptive Add：tag 在 `--extent DPA:LEN:TAG`（per-extent）；header tag 字段为 reserved |
 | 步骤 6b | `dcd-get-extent-list` 返回 LD0 已添加的 Extent（仅 Added 状态可见） |
 | 步骤 8 | FM extent list 含 1 条 LD0 Added extent，DPA = REGION_DPA |
 | 步骤 9 | `fm-dcd-list-tags` 显示 `DCD_TAG` 已分配 |
-| 步骤 12 | FM 侧 LD1 extent list 可见（Shared Access 生效） |
-| 步骤 17 | `fm-dcd-get-ext-list LD1` 仅展示（LD1 未确认 → Pending，不在列表中）；若添加了 reference，`fm-dcd-list-tags` 仍显示 tag（reference 持有容量） |
+| 步骤 11 | Enable Shared Access Add：tag 在顶层 `--tag`（header），须与步骤 4 完全一致 |
+| 步骤 12 | `fm-dcd-get-ext-list LD1` 仅展示（LD1 未确认 → Pending 不可见，可能为空） |
+| 步骤 17 | `fm-dcd-get-ext-list LD1` 仅展示（LD1 仍 Pending，不在列表中） |
+| 步骤 17b | 若添加了 reference：`fm-dcd-list-tags` 仍显示 `DCD_TAG`（reference 持有容量） |
 | 步骤 19 | FM force-release 后，LD1 extent list 为空 |
 | 步骤 21 | `fm-dcd-list-tags` 不再显示 `DCD_TAG`（所有引用和映射均已释放） |
 
@@ -313,6 +320,6 @@ sudo ./tests/mbcci-sfx-dcd-share-tests.sh mem0
 # 跳过 FM add/remove reference 步骤（步骤 10/20）
 sudo ./tests/mbcci-sfx-dcd-share-tests.sh --skip-reference mem0
 
-# 指定自定义 tag
-sudo ./tests/mbcci-sfx-dcd-share-tests.sh --tag deadbeef mem0
+# 指定自定义 tag（接受任意 hex，1-32 字符，可带 0x 前缀，右对齐零填充至 16 字节）
+sudo ./tests/mbcci-sfx-dcd-share-tests.sh --tag 0xdeadbeef mem0
 ```
