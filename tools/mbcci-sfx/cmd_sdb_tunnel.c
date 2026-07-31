@@ -6001,24 +6001,35 @@ static int dcd_parse_extent_arg(const char *arg,
 	*shared_seq = 0;
 
 	if (*end == ':') {
-		p = end + 1;
-		if (strlen(p) >= 32) {
-			char ts[33];
+		char *tag_start, *tag_end;
+		char ts[35];   /* max "0x" + 32 hex chars + NUL */
+		size_t tag_len;
 
-			memcpy(ts, p, 32);
-			ts[32] = '\0';
-			if (dcd_parse_hex_tag(ts, tag))
+		tag_start = end + 1;
+
+		/* Tag field ends at the next ':' (shared_seq) or end-of-string. */
+		tag_end = strchr(tag_start, ':');
+		tag_len = tag_end ? (size_t)(tag_end - tag_start) : strlen(tag_start);
+
+		if (tag_len == 0 || tag_len >= sizeof(ts)) {
+			fprintf(stderr,
+				"--extent: tag field too long (max 34 chars incl. 0x prefix)\n");
+			goto fail;
+		}
+
+		memcpy(ts, tag_start, tag_len);
+		ts[tag_len] = '\0';
+
+		if (dcd_parse_hex_tag(ts, tag))
+			goto fail;
+
+		if (tag_end && *tag_end == ':') {
+			unsigned long sv;
+
+			sv = strtoul(tag_end + 1, &end, 0);
+			if (end == tag_end + 1)
 				goto fail;
-			p += 32;
-			if (*p == ':') {
-				unsigned long sv;
-
-				p++;
-				sv = strtoul(p, &end, 0);
-				if (end == p)
-					goto fail;
-				*shared_seq = (uint16_t)sv;
-			}
+			*shared_seq = (uint16_t)sv;
 		}
 	}
 	rc = 0;
@@ -6026,7 +6037,7 @@ fail:
 	free(copy);
 	if (rc)
 		fprintf(stderr,
-			"--extent: invalid format '%s' (expected dpa:len[:tag32[:seq]])\n",
+			"--extent: invalid format '%s' (expected dpa:len[:tag[:seq]])\n",
 			arg);
 	return rc;
 }
