@@ -99,11 +99,11 @@ sequenceDiagram
 | 步骤 | 校验内容 |
 |------|---------|
 | 步骤 3 | host 侧 DCD log 含 Add Capacity 事件（type=00h），可解析 DPA |
-| 步骤 4b | `dcd-get-extent-list` 返回该 Extent（仅 Added 状态才可见） |
+| 步骤 4b | `dcd-get-extent-list` 必须能查到该 DPA 对应的 Extent（按 DPA 数值精确匹配，而非仅检查命令退出码） |
 | 步骤 5 | FM 侧 DCD log 含 Add Capacity Response 事件（type=04h） |
-| 步骤 6 | FM extent list 含 1 条已添加 Extent，DPA 与步骤 3 一致 |
+| 步骤 6 | FM extent list 必须包含该 DPA 对应的已添加 Extent（按 DPA 精确匹配，DPA 与步骤 3 一致） |
 | 步骤 8 | host 侧 DCD log 含 Release Capacity 事件（type=01h） |
-| 步骤 11 | FM extent list 为空 |
+| 步骤 11 | FM extent list 必须不再包含该 DPA（按 DPA 精确匹配，而非要求整表为空，避免与残留的其他 extent 冲突） |
 
 ---
 
@@ -123,20 +123,20 @@ sequenceDiagram
     Dev-->>FM: Success
     Note over Dev: Extent 进入 Pending 状态，设备选定 DPA
 
-    FM->>Dev: sdb-tunnel fm-dcd-get-ext-list (5603h)<br/>验证：Pending 状态不在列表中（仅 Added 可见）
-    Dev-->>FM: 空列表 ✓
-
-    Note over Host: [内部] 读 host DCD events 以获取 DPA<br/>（不清除 handle，用于步骤 3 的精确释放）
+    Note over Host: [内部] 读 host DCD events 以获取 DPA<br/>（不清除 handle，用于步骤 2b 的精确校验与步骤 3 的精确释放）
     Host->>Dev: get-event-records --log dcd (0100h)
     Dev-->>Host: Add Capacity 事件（type=00h，含 DPA）
     Note over Host: 解析 DPA，保留 handle 不清除
+
+    FM->>Dev: sdb-tunnel fm-dcd-get-ext-list (5603h)<br/>验证：该 DPA 不在列表中（Pending 状态不可见）
+    Dev-->>FM: 列表中无此 DPA ✓
 
     FM->>Dev: fm-dcd-initiate-release (5605h)<br/>--flags 0x11 (Prescriptive + Forced)<br/>--extent DPA:0x10000000
     Dev-->>FM: Success
     Note over Dev: Extent 内部标记为 Dead<br/>设备不向 Event Log 新增条目
 
-    FM->>Dev: sdb-tunnel fm-dcd-get-ext-list (5603h)<br/>验证：Dead 状态不在列表中
-    Dev-->>FM: 空列表 ✓
+    FM->>Dev: sdb-tunnel fm-dcd-get-ext-list (5603h)<br/>验证：该 DPA 仍不在列表中（Dead 状态不可见）
+    Dev-->>FM: 列表中无此 DPA ✓
 
     Host->>Dev: get-event-records --log dcd (0100h)<br/>验证原始 Add Capacity 事件仍然存在（未被 forced release 删除）
     Dev-->>Host: Add Capacity 事件（type=00h，与之前相同，DPA 一致）
@@ -151,20 +151,20 @@ sequenceDiagram
     Dev-->>FM: Add Capacity Response 事件（type=04h，Length=0）<br/>（若 log 溢出则可能丢失 → 仅 warn）
     FM->>Dev: sdb-tunnel clear-event-records --log dcd --handle H1 ...
 
-    FM->>Dev: sdb-tunnel fm-dcd-get-ext-list (5603h)<br/>验证：force-released Extent 不在列表中
-    Dev-->>FM: 空列表 ✓
+    FM->>Dev: sdb-tunnel fm-dcd-get-ext-list (5603h)<br/>验证：该 DPA 仍不在列表中（force-released）
+    Dev-->>FM: 列表中无此 DPA ✓
 ```
 
 ### 关键校验点
 
 | 步骤 | 校验内容 |
 |------|---------|
-| 步骤 1b | FM extent list 为空（Pending 状态不可见） |
-| 步骤 3b | FM extent list 为空（Dead 状态不可见） |
+| 步骤 2b | FM extent list 必须不包含该 DPA（Pending 状态不可见，按 DPA 精确匹配，而非要求整表为空） |
+| 步骤 3b | FM extent list 必须不包含该 DPA（Dead 状态不可见，按 DPA 精确匹配） |
 | 步骤 4 | host 侧 DCD log 中 Add Capacity 事件内容与 forced release 前完全相同（设备未修改） |
 | 步骤 5 | `dcd-add-response` 返回非零错误（Invalid Physical Address）—— extent 为 Dead |
 | 步骤 6 | FM 侧 DCD log 含 Add Capacity Response 事件（type=04h），Length=0 |
-| 步骤 7 | FM extent list 为空（Dead 项已彻底清除） |
+| 步骤 7 | FM extent list 必须不再包含该 DPA（force-released 项已彻底清除，按 DPA 精确匹配） |
 
 ---
 
@@ -290,14 +290,14 @@ sequenceDiagram
 | 步骤 1 | Region[0].Flags bit3 = `0x08`（Sharable）；否则 SKIP |
 | 步骤 2 | `fm-dcd-get-info` 执行成功（仅展示，无门控条件） |
 | 步骤 4 | Prescriptive Add：tag 在 `--extent DPA:LEN:TAG`（per-extent）；header tag 字段为 reserved |
-| 步骤 6b | `dcd-get-extent-list` 返回 LD0 已添加的 Extent（仅 Added 状态可见） |
-| 步骤 8 | FM extent list 含 1 条 LD0 Added extent，DPA = REGION_DPA |
+| 步骤 6b | `dcd-get-extent-list` 必须能查到 DPA=REGION_DPA 的 Extent（按 DPA 精确匹配，仅 Added 状态可见） |
+| 步骤 8 | FM extent list 必须包含 DPA=REGION_DPA 的 LD0 Added extent（按 DPA 精确匹配） |
 | 步骤 9 | `fm-dcd-list-tags` 显示 `DCD_TAG` 已分配 |
 | 步骤 11 | Enable Shared Access Add：tag 在顶层 `--tag`（header），须与步骤 4 完全一致 |
 | 步骤 12 | `fm-dcd-get-ext-list LD1` 仅展示（LD1 未确认 → Pending 不可见，可能为空） |
 | 步骤 17 | `fm-dcd-get-ext-list LD1` 仅展示（LD1 仍 Pending，不在列表中） |
 | 步骤 17b | 若添加了 reference：`fm-dcd-list-tags` 仍显示 `DCD_TAG`（reference 持有容量） |
-| 步骤 19 | FM force-release 后，LD1 extent list 为空 |
+| 步骤 19 | FM force-release 后，extent list 必须不再包含 DPA=REGION_DPA（按 DPA 精确匹配） |
 | 步骤 21 | `fm-dcd-list-tags` 不再显示 `DCD_TAG`（所有引用和映射均已释放） |
 
 ---

@@ -156,34 +156,29 @@ run_test() {
 	local label="$1"
 	shift
 	local rc=0
-	local logfile=""
+	local tmpfile
 
 	echo "==> [$label] $*"
-	if [ -n "${VERIFICATION_LOG_DIR:-}" ]; then
-		mkdir -p "$VERIFICATION_LOG_DIR"
-		logfile="$VERIFICATION_LOG_DIR/${label//\//_}.log"
-		if "$@" >"$logfile" 2>&1; then
-			cat "$logfile"
-			echo "    PASS"
-			PASS_COUNT=$((PASS_COUNT + 1))
-		else
-			rc=$?
-			cat "$logfile" >&2
-			echo "    FAIL (exit $rc)" >&2
-			FAILED_LABELS+=("$label")
-			FAILED_EXITS+=("$rc")
-			FAIL_COUNT=$((FAIL_COUNT + 1))
-		fi
-	elif "$@"; then
+	tmpfile=$(mktemp)
+	if "$@" >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
 		echo "    PASS"
 		PASS_COUNT=$((PASS_COUNT + 1))
 	else
 		rc=$?
+		cat "$tmpfile" >&2
 		echo "    FAIL (exit $rc)" >&2
+		print_fail_reason "$tmpfile"
 		FAILED_LABELS+=("$label")
 		FAILED_EXITS+=("$rc")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
 	fi
+
+	if [ -n "${VERIFICATION_LOG_DIR:-}" ]; then
+		mkdir -p "$VERIFICATION_LOG_DIR"
+		cp "$tmpfile" "$VERIFICATION_LOG_DIR/${label//\//_}.log"
+	fi
+	rm -f "$tmpfile"
 }
 
 record_warn() {
@@ -191,6 +186,119 @@ record_warn() {
 	local msg="$2"
 	echo "    WARN [$label]: $msg" >&2
 	WARN_COUNT=$((WARN_COUNT + 1))
+}
+
+# ---------------------------------------------------------------------------
+# Failure diagnostics
+#
+# Every step should explain *why* it failed right where it happens, not
+# only in the final summary table.
+# ---------------------------------------------------------------------------
+
+# Print a concise "Reason:" line extracted from a failed command's captured
+# stdout+stderr.  Prefers lines that look like error messages; falls back
+# to the last non-blank line (CLI tools typically print the most relevant
+# message last).
+# Usage: print_fail_reason <file>
+print_fail_reason() {
+	local file="$1"
+	local reason=""
+
+	if [ ! -s "$file" ]; then
+		echo "    Reason: (command produced no output)" >&2
+		return
+	fi
+
+	reason=$(grep -iE 'fail|error|invalid|denied|refused|unable|cannot|unsupported' "$file" | tail -n1)
+	[ -z "$reason" ] && reason=$(grep -v '^[[:space:]]*$' "$file" | tail -n1)
+	reason="$(printf '%s' "$reason" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+
+	[ -n "$reason" ] && echo "    Reason: $reason" >&2
+}
+
+# Print a short summary of an extent-list output file (counts + DPA list),
+# used to explain assert_extent_present/assert_extent_absent failures.
+# Usage: summarize_extent_list <file>
+summarize_extent_list() {
+	local file="$1"
+	local counts dpas
+
+	counts=$(grep -E '(Extents Returned|Total Extents):' "$file" | \
+		tr -s '[:space:]' ' ' | sed -e 's/^ *//' -e 's/ *$//')
+	dpas=$(grep -oE 'DPA=0x[0-9a-fA-F]+' "$file" | tr '\n' ' ')
+
+	echo "    List summary: ${counts:-<no count line found>}" >&2
+	echo "    Entries seen: ${dpas:-<none>}" >&2
+}
+
+# ---------------------------------------------------------------------------
+# Extent-list content assertions
+#
+# dcd-get-extent-list / fm-dcd-get-ext-list both print entries as:
+#   "  [N] DPA=0x<hex> Len=0x<hex> Tag=... SharedSeq=N"
+#
+# These helpers parse the saved command output and check, by numeric
+# comparison (tolerant of leading zeros / case), whether a specific
+# DPA(+Len) entry is present.  Matching a specific extent (rather than
+# asserting the whole list is empty) is more robust against unrelated
+# extents that may legitimately remain on the device.
+# ---------------------------------------------------------------------------
+
+# Usage: extent_list_has_entry <file> <dpa_hex> [<len_hex>]
+extent_list_has_entry() {
+	local file="$1"
+	local want_dpa="$2"
+	local want_len="${3:-}"
+	local want_dpa_num want_len_num=""
+	want_dpa_num=$(( want_dpa ))
+	[ -n "$want_len" ] && want_len_num=$(( want_len ))
+
+	while IFS= read -r line; do
+		if [[ "$line" =~ DPA=0x([0-9a-fA-F]+)[[:space:]]+Len=0x([0-9a-fA-F]+) ]]; then
+			local dpa_num len_num
+			dpa_num=$(( 16#${BASH_REMATCH[1]} ))
+			len_num=$(( 16#${BASH_REMATCH[2]} ))
+			if [ "$dpa_num" -eq "$want_dpa_num" ] && \
+			   { [ -z "$want_len" ] || [ "$len_num" -eq "$want_len_num" ]; }; then
+				return 0
+			fi
+		fi
+	done < "$file"
+	return 1
+}
+
+# Assert the given DPA(+Len) IS present in the extent-list output file
+# (e.g. after the extent transitions to Added).
+# Usage: assert_extent_present <label> <file> <dpa_hex> [<len_hex>]
+assert_extent_present() {
+	local label="$1" file="$2" dpa="$3" len="${4:-}"
+	if extent_list_has_entry "$file" "$dpa" "$len"; then
+		echo "    PASS (extent DPA=$dpa found in list)"
+		PASS_COUNT=$((PASS_COUNT + 1))
+	else
+		echo "    FAIL (extent DPA=$dpa NOT found in list; expected Added/visible)" >&2
+		summarize_extent_list "$file"
+		FAILED_LABELS+=("$label")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	fi
+}
+
+# Assert the given DPA(+Len) is NOT present in the extent-list output file
+# (e.g. after release, or while Pending/Dead — not yet/no longer Added).
+# Usage: assert_extent_absent <label> <file> <dpa_hex> [<len_hex>]
+assert_extent_absent() {
+	local label="$1" file="$2" dpa="$3" len="${4:-}"
+	if extent_list_has_entry "$file" "$dpa" "$len"; then
+		echo "    FAIL (extent DPA=$dpa still present in list; expected absent)" >&2
+		summarize_extent_list "$file"
+		FAILED_LABELS+=("$label")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	else
+		echo "    PASS (extent DPA=$dpa correctly absent from list)"
+		PASS_COUNT=$((PASS_COUNT + 1))
+	fi
 }
 
 print_summary() {
@@ -354,6 +462,7 @@ run_case3() {
 	else
 		cat "$tmpfile" >&2
 		echo "    FAIL (fm-dcd-get-region-config failed)" >&2
+		print_fail_reason "$tmpfile"
 		FAILED_LABELS+=("case3/1-fm-dcd-get-region-config")
 		FAILED_EXITS+=("1")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -424,6 +533,7 @@ run_case3() {
 	else
 		cat "$tmpfile" >&2
 		echo "    FAIL (cannot read LD0 DCD events)" >&2
+		print_fail_reason "$tmpfile"
 		FAILED_LABELS+=("case3/5-ld0-read-dcd-events")
 		FAILED_EXITS+=("1")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -445,10 +555,24 @@ run_case3() {
 			--extent "${REGION_DPA}:${DCD_EXTENT_SIZE}"
 
 	# Step 6b: LD0 verifies Added extent is visible in its local extent list.
-	run_test "case3/6b-ld0-dcd-get-extent-list" \
-		"$MBCCI" "$MEMDEV" dcd-get-extent-list \
+	echo ""
+	echo "==> [case3/6b-ld0-dcd-get-extent-list] $MBCCI $MEMDEV dcd-get-extent-list ..."
+	tmpfile=$(mktemp)
+	if "$MBCCI" "$MEMDEV" dcd-get-extent-list \
 			--extent-cnt       "$DCD_EXTENT_CNT" \
-			--start-extent-idx 0
+			--start-extent-idx 0 >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
+		assert_extent_present "case3/6b-ld0-dcd-get-extent-list" "$tmpfile" \
+			"$REGION_DPA" "$DCD_EXTENT_SIZE"
+	else
+		cat "$tmpfile" >&2
+		echo "    FAIL (dcd-get-extent-list failed)" >&2
+		print_fail_reason "$tmpfile"
+		FAILED_LABELS+=("case3/6b-ld0-dcd-get-extent-list")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	fi
+	rm -f "$tmpfile"
 
 	# Step 7: FM reads DCD events (Add Capacity Response, type=04h) and clears handles.
 	echo ""
@@ -461,6 +585,7 @@ run_case3() {
 	else
 		cat "$tmpfile" >&2
 		echo "    FAIL (FM get-event-records failed)" >&2
+		print_fail_reason "$tmpfile"
 		FAILED_LABELS+=("case3/7-fm-read-dcd-events-after-add")
 		FAILED_EXITS+=("1")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -474,10 +599,24 @@ run_case3() {
 	fi
 
 	# Step 8: FM verifies LD0 extent list — should show 1 Added extent.
-	run_test "case3/8-fm-dcd-get-ext-list-ld0-added" \
-		"$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
+	echo ""
+	echo "==> [case3/8-fm-dcd-get-ext-list-ld0-added] $MBCCI $MEMDEV sdb-tunnel fm-dcd-get-ext-list ..."
+	tmpfile=$(mktemp)
+	if "$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
 			--host-id "$DCD_HOST_ID_LD0" \
-			--port "$DCD_SDB_PORT"
+			--port "$DCD_SDB_PORT" >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
+		assert_extent_present "case3/8-fm-dcd-get-ext-list-ld0-added" "$tmpfile" \
+			"$REGION_DPA" "$DCD_EXTENT_SIZE"
+	else
+		cat "$tmpfile" >&2
+		echo "    FAIL (fm-dcd-get-ext-list failed)" >&2
+		print_fail_reason "$tmpfile"
+		FAILED_LABELS+=("case3/8-fm-dcd-get-ext-list-ld0-added")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	fi
+	rm -f "$tmpfile"
 
 	# Step 9: FM verifies the allocated tag appears in fm-dcd-list-tags.
 	run_test "case3/9-fm-dcd-list-tags-after-add" \
@@ -537,6 +676,7 @@ run_case3() {
 	else
 		cat "$tmpfile" >&2
 		echo "    FAIL (cannot read LD0 DCD events)" >&2
+		print_fail_reason "$tmpfile"
 		FAILED_LABELS+=("case3/14-ld0-read-release-events")
 		FAILED_EXITS+=("1")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -618,11 +758,25 @@ run_case3() {
 			--extent  "${REGION_DPA}:${DCD_EXTENT_SIZE}" \
 			--port "$DCD_SDB_PORT"
 
-	# Step 19: FM verifies LD1 extent list is now empty (force-released).
-	run_test "case3/19-fm-dcd-get-ext-list-ld1-empty" \
-		"$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
+	# Step 19: FM verifies LD1's extent no longer appears (force-released).
+	echo ""
+	echo "==> [case3/19-fm-dcd-get-ext-list-ld1-empty] $MBCCI $MEMDEV sdb-tunnel fm-dcd-get-ext-list ..."
+	tmpfile=$(mktemp)
+	if "$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
 			--host-id "$DCD_HOST_ID_LD1" \
-			--port "$DCD_SDB_PORT"
+			--port "$DCD_SDB_PORT" >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
+		assert_extent_absent "case3/19-fm-dcd-get-ext-list-ld1-empty" "$tmpfile" \
+			"$REGION_DPA" "$DCD_EXTENT_SIZE"
+	else
+		cat "$tmpfile" >&2
+		echo "    FAIL (fm-dcd-get-ext-list failed)" >&2
+		print_fail_reason "$tmpfile"
+		FAILED_LABELS+=("case3/19-fm-dcd-get-ext-list-ld1-empty")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	fi
+	rm -f "$tmpfile"
 
 	# Step 20 [optional]: FM removes the reference (must be paired with step 10).
 	# Once the reference is removed and no host holds the capacity, the device

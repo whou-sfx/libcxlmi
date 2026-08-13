@@ -38,17 +38,17 @@
 # Case 2 sequence:
 #   0.  Flush all stale DCD events (Host + FM)
 #   1.  FM  : fm-dcd-initiate-add                        → Extent Pending
-#   1b. FM  : fm-dcd-get-ext-list  (Pending → expect empty — only Added visible)
 #   2.  [internal] Host: read DCD events, parse DPA (no clear yet — needed for step 3)
+#   2b. FM  : fm-dcd-get-ext-list  (assert this DPA absent — Pending not visible)
 #   3.  FM  : fm-dcd-initiate-release --flags 0x11 --extent DPA:LEN (Prescriptive + Forced)
 #                                                         → Extent Dead
-#   3b. FM  : fm-dcd-get-ext-list  (Dead → expect empty — only Added visible)
+#   3b. FM  : fm-dcd-get-ext-list  (assert this DPA absent — Dead not visible)
 #   4.  Host: read DCD events (original Add Capacity event still present, verify unchanged)
 #             clear handles
 #   5.  Host: dcd-add-response → device returns "Invalid Physical Address" (extent is Dead)
 #   6.  FM  : read DCD events → expect Add Capacity Response (type=04h) with Length=0
 #             (no overflow → event must be present; Length=0 confirms no capacity allocated)
-#   7.  FM  : fm-dcd-get-ext-list  (force-released extent must NOT appear)
+#   7.  FM  : fm-dcd-get-ext-list  (assert this DPA absent — force-released extent must NOT appear)
 #
 # Exits non-zero if any test failed; continues across steps.
 
@@ -143,34 +143,29 @@ run_test() {
 	local label="$1"
 	shift
 	local rc=0
-	local logfile=""
+	local tmpfile
 
 	echo "==> [$label] $*"
-	if [ -n "${VERIFICATION_LOG_DIR:-}" ]; then
-		mkdir -p "$VERIFICATION_LOG_DIR"
-		logfile="$VERIFICATION_LOG_DIR/${label//\//_}.log"
-		if "$@" >"$logfile" 2>&1; then
-			cat "$logfile"
-			echo "    PASS"
-			PASS_COUNT=$((PASS_COUNT + 1))
-		else
-			rc=$?
-			cat "$logfile" >&2
-			echo "    FAIL (exit $rc)" >&2
-			FAILED_LABELS+=("$label")
-			FAILED_EXITS+=("$rc")
-			FAIL_COUNT=$((FAIL_COUNT + 1))
-		fi
-	elif "$@"; then
+	tmpfile=$(mktemp)
+	if "$@" >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
 		echo "    PASS"
 		PASS_COUNT=$((PASS_COUNT + 1))
 	else
 		rc=$?
+		cat "$tmpfile" >&2
 		echo "    FAIL (exit $rc)" >&2
+		print_fail_reason "$tmpfile"
 		FAILED_LABELS+=("$label")
 		FAILED_EXITS+=("$rc")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
 	fi
+
+	if [ -n "${VERIFICATION_LOG_DIR:-}" ]; then
+		mkdir -p "$VERIFICATION_LOG_DIR"
+		cp "$tmpfile" "$VERIFICATION_LOG_DIR/${label//\//_}.log"
+	fi
+	rm -f "$tmpfile"
 }
 
 record_warn() {
@@ -180,6 +175,120 @@ record_warn() {
 	WARN_COUNT=$((WARN_COUNT + 1))
 }
 
+# ---------------------------------------------------------------------------
+# Failure diagnostics
+#
+# Every step should explain *why* it failed right where it happens, not
+# only in the final summary table.
+# ---------------------------------------------------------------------------
+
+# Print a concise "Reason:" line extracted from a failed command's captured
+# stdout+stderr.  Prefers lines that look like error messages; falls back
+# to the last non-blank line (CLI tools typically print the most relevant
+# message last).
+# Usage: print_fail_reason <file>
+print_fail_reason() {
+	local file="$1"
+	local reason=""
+
+	if [ ! -s "$file" ]; then
+		echo "    Reason: (command produced no output)" >&2
+		return
+	fi
+
+	reason=$(grep -iE 'fail|error|invalid|denied|refused|unable|cannot|unsupported' "$file" | tail -n1)
+	[ -z "$reason" ] && reason=$(grep -v '^[[:space:]]*$' "$file" | tail -n1)
+	reason="$(printf '%s' "$reason" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+
+	[ -n "$reason" ] && echo "    Reason: $reason" >&2
+}
+
+# Print a short summary of an extent-list output file (counts + DPA list),
+# used to explain assert_extent_present/assert_extent_absent failures.
+# Usage: summarize_extent_list <file>
+summarize_extent_list() {
+	local file="$1"
+	local counts dpas
+
+	counts=$(grep -E '(Extents Returned|Total Extents):' "$file" | \
+		tr -s '[:space:]' ' ' | sed -e 's/^ *//' -e 's/ *$//')
+	dpas=$(grep -oE 'DPA=0x[0-9a-fA-F]+' "$file" | tr '\n' ' ')
+
+	echo "    List summary: ${counts:-<no count line found>}" >&2
+	echo "    Entries seen: ${dpas:-<none>}" >&2
+}
+
+# ---------------------------------------------------------------------------
+# Extent-list content assertions
+#
+# dcd-get-extent-list / fm-dcd-get-ext-list both print entries as:
+#   "  [N] DPA=0x<hex> Len=0x<hex> Tag=... SharedSeq=N"
+#
+# These helpers parse the saved command output and check, by numeric
+# comparison (tolerant of leading zeros / case), whether a specific
+# DPA(+Len) entry is present.  Matching a specific extent (rather than
+# asserting the whole list is empty) is more robust: unrelated extents
+# may legitimately remain on the device (e.g. Case 1 run with
+# --skip-release leaves its extent Added).
+# ---------------------------------------------------------------------------
+
+# Usage: extent_list_has_entry <file> <dpa_hex> [<len_hex>]
+extent_list_has_entry() {
+	local file="$1"
+	local want_dpa="$2"
+	local want_len="${3:-}"
+	local want_dpa_num want_len_num=""
+	want_dpa_num=$(( want_dpa ))
+	[ -n "$want_len" ] && want_len_num=$(( want_len ))
+
+	while IFS= read -r line; do
+		if [[ "$line" =~ DPA=0x([0-9a-fA-F]+)[[:space:]]+Len=0x([0-9a-fA-F]+) ]]; then
+			local dpa_num len_num
+			dpa_num=$(( 16#${BASH_REMATCH[1]} ))
+			len_num=$(( 16#${BASH_REMATCH[2]} ))
+			if [ "$dpa_num" -eq "$want_dpa_num" ] && \
+			   { [ -z "$want_len" ] || [ "$len_num" -eq "$want_len_num" ]; }; then
+				return 0
+			fi
+		fi
+	done < "$file"
+	return 1
+}
+
+# Assert the given DPA(+Len) IS present in the extent-list output file
+# (e.g. after the extent transitions to Added).
+# Usage: assert_extent_present <label> <file> <dpa_hex> [<len_hex>]
+assert_extent_present() {
+	local label="$1" file="$2" dpa="$3" len="${4:-}"
+	if extent_list_has_entry "$file" "$dpa" "$len"; then
+		echo "    PASS (extent DPA=$dpa found in list)"
+		PASS_COUNT=$((PASS_COUNT + 1))
+	else
+		echo "    FAIL (extent DPA=$dpa NOT found in list; expected Added/visible)" >&2
+		summarize_extent_list "$file"
+		FAILED_LABELS+=("$label")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	fi
+}
+
+# Assert the given DPA(+Len) is NOT present in the extent-list output file
+# (e.g. after release, or while Pending/Dead — not yet/no longer Added).
+# Usage: assert_extent_absent <label> <file> <dpa_hex> [<len_hex>]
+assert_extent_absent() {
+	local label="$1" file="$2" dpa="$3" len="${4:-}"
+	if extent_list_has_entry "$file" "$dpa" "$len"; then
+		echo "    FAIL (extent DPA=$dpa still present in list; expected absent)" >&2
+		summarize_extent_list "$file"
+		FAILED_LABELS+=("$label")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	else
+		echo "    PASS (extent DPA=$dpa correctly absent from list)"
+		PASS_COUNT=$((PASS_COUNT + 1))
+	fi
+}
+
 # Like run_test, but PASSES when the command exits non-zero.
 # Use for commands expected to return a CXL error code
 # (e.g. "Invalid Physical Address" on a Dead extent).
@@ -187,34 +296,29 @@ run_test_expect_fail() {
 	local label="$1"
 	shift
 	local rc=0
-	local logfile=""
+	local tmpfile
 
 	echo "==> [$label] (expecting failure) $*"
-	if [ -n "${VERIFICATION_LOG_DIR:-}" ]; then
-		mkdir -p "$VERIFICATION_LOG_DIR"
-		logfile="$VERIFICATION_LOG_DIR/${label//\//_}.log"
-		if "$@" >"$logfile" 2>&1; then
-			cat "$logfile"
-			echo "    FAIL (expected non-zero exit but command succeeded)" >&2
-			FAILED_LABELS+=("$label")
-			FAILED_EXITS+=("unexpected-success")
-			FAIL_COUNT=$((FAIL_COUNT + 1))
-		else
-			rc=$?
-			cat "$logfile"
-			echo "    PASS (failed as expected, exit $rc)"
-			PASS_COUNT=$((PASS_COUNT + 1))
-		fi
-	elif "$@"; then
+	tmpfile=$(mktemp)
+	if "$@" >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
 		echo "    FAIL (expected non-zero exit but command succeeded)" >&2
+		echo "    Reason: command exited 0; a non-zero CXL error return code was expected here" >&2
 		FAILED_LABELS+=("$label")
 		FAILED_EXITS+=("unexpected-success")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
 	else
 		rc=$?
+		cat "$tmpfile"
 		echo "    PASS (failed as expected, exit $rc)"
 		PASS_COUNT=$((PASS_COUNT + 1))
 	fi
+
+	if [ -n "${VERIFICATION_LOG_DIR:-}" ]; then
+		mkdir -p "$VERIFICATION_LOG_DIR"
+		cp "$tmpfile" "$VERIFICATION_LOG_DIR/${label//\//_}.log"
+	fi
+	rm -f "$tmpfile"
 }
 
 print_summary() {
@@ -400,6 +504,7 @@ capture_host_dcd_dpa() {
 	else
 		cat "$tmpfile" >&2
 		echo "    FAIL (cannot read host DCD events)" >&2
+		print_fail_reason "$tmpfile"
 		FAILED_LABELS+=("$label")
 		FAILED_EXITS+=("1")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -474,10 +579,24 @@ run_case1() {
 			--extent "${EXTENT_DPA}:${DCD_EXTENT_SIZE}"
 
 	# Step 4b: Host verifies Added extent now visible in its local extent list
-	run_test "case1/4b-host-dcd-get-extent-list" \
-		"$MBCCI" "$MEMDEV" dcd-get-extent-list \
+	echo ""
+	echo "==> [case1/4b-host-dcd-get-extent-list] $MBCCI $MEMDEV dcd-get-extent-list ..."
+	tmpfile=$(mktemp)
+	if "$MBCCI" "$MEMDEV" dcd-get-extent-list \
 			--extent-cnt  "$DCD_EXTENT_CNT" \
-			--start-extent-idx 0
+			--start-extent-idx 0 >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
+		assert_extent_present "case1/4b-host-dcd-get-extent-list" "$tmpfile" \
+			"$EXTENT_DPA" "$DCD_EXTENT_SIZE"
+	else
+		cat "$tmpfile" >&2
+		echo "    FAIL (dcd-get-extent-list failed)" >&2
+		print_fail_reason "$tmpfile"
+		FAILED_LABELS+=("case1/4b-host-dcd-get-extent-list")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	fi
+	rm -f "$tmpfile"
 
 	# Step 5: FM reads DCD events (Add Capacity Response, type=04h), clears
 	echo ""
@@ -489,7 +608,8 @@ run_case1() {
 		PASS_COUNT=$((PASS_COUNT + 1))
 	else
 		cat "$tmpfile" >&2
-		echo "    FAIL" >&2
+		echo "    FAIL (fm get-event-records failed)" >&2
+		print_fail_reason "$tmpfile"
 		FAILED_LABELS+=("case1/5-fm-read-dcd-events")
 		FAILED_EXITS+=("1")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -503,10 +623,24 @@ run_case1() {
 	fi
 
 	# Step 6: FM verifies extent list — should show 1 Added extent
-	run_test "case1/6-fm-dcd-get-ext-list-added" \
-		"$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
+	echo ""
+	echo "==> [case1/6-fm-dcd-get-ext-list-added] $MBCCI $MEMDEV sdb-tunnel fm-dcd-get-ext-list ..."
+	tmpfile=$(mktemp)
+	if "$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
 			--host-id "$DCD_HOST_ID" \
-			--port "$DCD_SDB_PORT"
+			--port "$DCD_SDB_PORT" >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
+		assert_extent_present "case1/6-fm-dcd-get-ext-list-added" "$tmpfile" \
+			"$EXTENT_DPA" "$DCD_EXTENT_SIZE"
+	else
+		cat "$tmpfile" >&2
+		echo "    FAIL (fm-dcd-get-ext-list failed)" >&2
+		print_fail_reason "$tmpfile"
+		FAILED_LABELS+=("case1/6-fm-dcd-get-ext-list-added")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	fi
+	rm -f "$tmpfile"
 
 	# ------------------------------------------------------------------
 	# Release section (steps 7-11): skippable with --skip-release
@@ -536,7 +670,8 @@ run_case1() {
 		PASS_COUNT=$((PASS_COUNT + 1))
 	else
 		cat "$tmpfile" >&2
-		echo "    FAIL" >&2
+		echo "    FAIL (host get-event-records failed)" >&2
+		print_fail_reason "$tmpfile"
 		FAILED_LABELS+=("case1/8-host-read-release-events")
 		FAILED_EXITS+=("1")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -582,11 +717,25 @@ run_case1() {
 	fi
 	rm -f "$tmpfile"
 
-	# Step 11: FM verifies extent list is now empty
-	run_test "case1/11-fm-dcd-get-ext-list-empty" \
-		"$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
+	# Step 11: FM verifies the released extent no longer appears in its list
+	echo ""
+	echo "==> [case1/11-fm-dcd-get-ext-list-empty] $MBCCI $MEMDEV sdb-tunnel fm-dcd-get-ext-list ..."
+	tmpfile=$(mktemp)
+	if "$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
 			--host-id "$DCD_HOST_ID" \
-			--port "$DCD_SDB_PORT"
+			--port "$DCD_SDB_PORT" >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
+		assert_extent_absent "case1/11-fm-dcd-get-ext-list-empty" "$tmpfile" \
+			"$EXTENT_DPA" "$DCD_EXTENT_SIZE"
+	else
+		cat "$tmpfile" >&2
+		echo "    FAIL (fm-dcd-get-ext-list failed)" >&2
+		print_fail_reason "$tmpfile"
+		FAILED_LABELS+=("case1/11-fm-dcd-get-ext-list-empty")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	fi
+	rm -f "$tmpfile"
 }
 
 # ---------------------------------------------------------------------------
@@ -614,15 +763,10 @@ run_case2() {
 			--selection-policy 1 \
 			--port "$DCD_SDB_PORT"
 
-	# Step 1b: FM checks extent list — Pending extent must NOT appear (only Added are visible)
-	run_test "case2/1b-fm-dcd-get-ext-list-pending-not-visible" \
-		"$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
-			--host-id "$DCD_HOST_ID" \
-			--port "$DCD_SDB_PORT"
-
 	# Step 2 (internal): Host reads DCD events to get the DPA allocated by the device.
 	# Handles are NOT cleared here; step 4 will do the full read-verify-clear.
-	# This DPA is needed for the prescriptive forced release (step 3).
+	# This DPA is needed both for the "Pending not visible" check below (2b)
+	# and for the prescriptive forced release (step 3).
 	echo ""
 	echo "  [case2] Pre-reading host DCD events to extract DPA for prescriptive release..."
 	tmpfile=$(mktemp)
@@ -641,6 +785,29 @@ run_case2() {
 	fi
 	echo "  [case2] Extent DPA: $EXTENT_DPA"
 
+	# Step 2b: FM checks extent list — Pending extent must NOT appear
+	# (only Added extents are visible). Now that EXTENT_DPA is known, check
+	# this specific extent's absence rather than assuming the whole list
+	# is empty (unrelated extents may legitimately be present).
+	echo ""
+	echo "==> [case2/2b-fm-dcd-get-ext-list-pending-not-visible] $MBCCI $MEMDEV sdb-tunnel fm-dcd-get-ext-list ..."
+	tmpfile=$(mktemp)
+	if "$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
+			--host-id "$DCD_HOST_ID" \
+			--port "$DCD_SDB_PORT" >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
+		assert_extent_absent "case2/2b-fm-dcd-get-ext-list-pending-not-visible" "$tmpfile" \
+			"$EXTENT_DPA" "$DCD_EXTENT_SIZE"
+	else
+		cat "$tmpfile" >&2
+		echo "    FAIL (fm-dcd-get-ext-list failed)" >&2
+		print_fail_reason "$tmpfile"
+		FAILED_LABELS+=("case2/2b-fm-dcd-get-ext-list-pending-not-visible")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	fi
+	rm -f "$tmpfile"
+
 	# Step 3: FM issues Prescriptive Forced Release (flags=0x11) before Host confirms.
 	#   flags bits[3:0] = 0x1 (Prescriptive)
 	#   flags bit[4]    = 0x1 (Forced Removal)
@@ -655,10 +822,24 @@ run_case2() {
 			--port "$DCD_SDB_PORT"
 
 	# Step 3b: FM checks extent list again — Dead extent also must NOT appear
-	run_test "case2/3b-fm-dcd-get-ext-list-dead-not-visible" \
-		"$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
+	echo ""
+	echo "==> [case2/3b-fm-dcd-get-ext-list-dead-not-visible] $MBCCI $MEMDEV sdb-tunnel fm-dcd-get-ext-list ..."
+	tmpfile=$(mktemp)
+	if "$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
 			--host-id "$DCD_HOST_ID" \
-			--port "$DCD_SDB_PORT"
+			--port "$DCD_SDB_PORT" >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
+		assert_extent_absent "case2/3b-fm-dcd-get-ext-list-dead-not-visible" "$tmpfile" \
+			"$EXTENT_DPA" "$DCD_EXTENT_SIZE"
+	else
+		cat "$tmpfile" >&2
+		echo "    FAIL (fm-dcd-get-ext-list failed)" >&2
+		print_fail_reason "$tmpfile"
+		FAILED_LABELS+=("case2/3b-fm-dcd-get-ext-list-dead-not-visible")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	fi
+	rm -f "$tmpfile"
 
 	# Step 4: Host reads all DCD events.
 	# The original Add Capacity event from step 1 must still be present and unchanged
@@ -673,6 +854,7 @@ run_case2() {
 	else
 		cat "$tmpfile" >&2
 		echo "    FAIL (cannot read host DCD events)" >&2
+		print_fail_reason "$tmpfile"
 		FAILED_LABELS+=("case2/4-host-read-dcd-events")
 		FAILED_EXITS+=("1")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -797,6 +979,7 @@ PYEOF
 			;;
 		NOT_FOUND)
 			echo "    FAIL (no Add Capacity Response event found in FM DCD log)" >&2
+			echo "    Reason: no record with type=0x04 (Add Capacity Response) for LD ID 0 was found in the FM DCD log above" >&2
 			FAILED_LABELS+=("case2/6-fm-dcd-add-response-event")
 			FAILED_EXITS+=("1")
 			FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -813,18 +996,32 @@ PYEOF
 	else
 		cat "$tmpfile" >&2
 		echo "    FAIL (FM get-event-records failed)" >&2
+		print_fail_reason "$tmpfile"
 		FAILED_LABELS+=("case2/6-fm-dcd-add-response-event")
 		FAILED_EXITS+=("1")
 		FAIL_COUNT=$((FAIL_COUNT + 1))
 	fi
 	rm -f "$tmpfile"
 
-	# Step 7: FM verifies extent list is empty.
-	# The force-released extent (which was Pending/Dead) must not appear.
-	run_test "case2/7-fm-dcd-get-ext-list-empty" \
-		"$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
+	# Step 7: FM verifies the force-released extent (Pending/Dead) no longer appears.
+	echo ""
+	echo "==> [case2/7-fm-dcd-get-ext-list-empty] $MBCCI $MEMDEV sdb-tunnel fm-dcd-get-ext-list ..."
+	tmpfile=$(mktemp)
+	if "$MBCCI" "$MEMDEV" sdb-tunnel fm-dcd-get-ext-list \
 			--host-id "$DCD_HOST_ID" \
-			--port "$DCD_SDB_PORT"
+			--port "$DCD_SDB_PORT" >"$tmpfile" 2>&1; then
+		cat "$tmpfile"
+		assert_extent_absent "case2/7-fm-dcd-get-ext-list-empty" "$tmpfile" \
+			"$EXTENT_DPA" "$DCD_EXTENT_SIZE"
+	else
+		cat "$tmpfile" >&2
+		echo "    FAIL (fm-dcd-get-ext-list failed)" >&2
+		print_fail_reason "$tmpfile"
+		FAILED_LABELS+=("case2/7-fm-dcd-get-ext-list-empty")
+		FAILED_EXITS+=("1")
+		FAIL_COUNT=$((FAIL_COUNT + 1))
+	fi
+	rm -f "$tmpfile"
 }
 
 # ---------------------------------------------------------------------------
