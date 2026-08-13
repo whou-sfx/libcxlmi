@@ -112,8 +112,10 @@ static void usage(FILE *out, const char *prog)
 {
 	size_t i;
 
-	fprintf(out, "Usage: %s <memN> <subcommand> [args...]\n", prog);
+	fprintf(out, "Usage: %s [-v] <memN> <subcommand> [args...]\n", prog);
 	fprintf(out, "       %s -h | --help\n\n", prog);
+	fprintf(out, "Options:\n");
+	fprintf(out, "  -v, --verbose  Enable debug output: print MB ioctl TX/RX payloads\n\n");
 	fprintf(out, "<memN>      CXL device under /dev/cxl/, e.g. mem0\n\n");
 	fprintf(out, "Subcommands:\n");
 	for (i = 0; i < nsubcmds; i++)
@@ -139,7 +141,21 @@ int main(int argc, char **argv)
 	struct cxlmi_endpoint *ep;
 	const char *devname;
 	const char *cmdname;
+	int log_level = LOG_WARNING;
 	int rc;
+
+	/* Pre-scan for -v/--verbose before touching any other args. */
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "-v") == 0 ||
+		    strcmp(argv[i], "--verbose") == 0) {
+			log_level = LOG_DEBUG;
+			/* Collapse the flag so subcmd sees a clean argv. */
+			memmove(&argv[i], &argv[i + 1],
+				(argc - i) * sizeof(*argv));
+			argc--;
+			i--;
+		}
+	}
 
 	if (argc >= 2 &&
 	    (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
@@ -162,7 +178,7 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	ctx = cxlmi_new_ctx(stderr, LOG_WARNING);
+	ctx = cxlmi_new_ctx(stderr, log_level);
 	if (!ctx) {
 		fprintf(stderr, "cannot create libcxlmi context\n");
 		return EXIT_FAILURE;

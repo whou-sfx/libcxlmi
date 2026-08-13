@@ -786,6 +786,26 @@ static int send_mctp_tunnel2(struct cxlmi_endpoint *ep,
 	return rc;
 }
 
+/* Print a hex dump to ctx->fp when log level >= LOG_DEBUG. */
+static void cxlmi_hexdump(struct cxlmi_ctx *ctx, const char *label,
+			  const void *buf, size_t len)
+{
+	const uint8_t *p = (const uint8_t *)buf;
+	size_t i;
+
+	if (ctx->log_level < LOG_DEBUG || !len)
+		return;
+
+	fprintf(ctx->fp, "  [%s] (%zu bytes):\n", label, len);
+	for (i = 0; i < len; i++) {
+		if (i % 16 == 0)
+			fprintf(ctx->fp, "    %04zx: ", i);
+		fprintf(ctx->fp, "%02x ", p[i]);
+		if (i % 16 == 15 || i == len - 1)
+			fprintf(ctx->fp, "\n");
+	}
+}
+
 static int send_ioctl_direct(struct cxlmi_endpoint *ep,
 		      struct cxlmi_cci_msg *req_msg, size_t req_msg_sz,
 		      struct cxlmi_cci_msg *rsp_msg, size_t rsp_msg_sz,
@@ -793,15 +813,21 @@ static int send_ioctl_direct(struct cxlmi_endpoint *ep,
 {
 	int rc, errno_save;
 	struct cxlmi_ctx *ctx = ep->ctx;
+	uint16_t opcode = req_msg->command | (req_msg->command_set << 8);
+	size_t in_sz = req_msg_sz - sizeof(*req_msg);
 	struct cxl_send_command cmd = {
 		.id = CXL_MEM_COMMAND_ID_RAW,
-		.raw.opcode = req_msg->command | (req_msg->command_set << 8),
+		.raw.opcode = opcode,
 		/* The payload is the same, but take off the CCI message header */
-		.in.size = req_msg_sz - sizeof(*req_msg),
+		.in.size = in_sz,
 		.in.payload = (__u64)req_msg->payload,
 		.out.size = rsp_msg_sz - sizeof(*rsp_msg),
 		.out.payload = (__u64)rsp_msg->payload,
 	};
+
+	cxlmi_msg(ctx, LOG_DEBUG, "MB TX opcode=0x%04x payload_sz=%zu\n",
+		  opcode, in_sz);
+	cxlmi_hexdump(ctx, "MB TX payload", req_msg->payload, in_sz);
 
 	rc = ioctl(ep->fd, CXL_MEM_SEND_COMMAND, &cmd);
 	if (rc < 0) {
@@ -825,6 +851,10 @@ static int send_ioctl_direct(struct cxlmi_endpoint *ep,
 	rsp_msg->pl_length[0] = cmd.out.size & 0xff;
 	rsp_msg->pl_length[1] = (cmd.out.size >> 8) & 0xff;
 	rsp_msg->pl_length[2] = (cmd.out.size >> 16) & 0x0f;
+
+	cxlmi_msg(ctx, LOG_DEBUG, "MB RX opcode=0x%04x payload_sz=%u\n",
+		  opcode, cmd.out.size);
+	cxlmi_hexdump(ctx, "MB RX payload", rsp_msg->payload, cmd.out.size);
 
 	/* To make it compatible with CXL2.0, do not impose size check */
 	if (cmd.out.size < rsp_msg_sz_min - sizeof(*rsp_msg)) {

@@ -651,6 +651,7 @@ struct cxlmi_cmd_memdev_get_dc_extent_list_rsp {
 } __attribute__((packed));
 
 /* CXL r3.1 Section 8.2.9.9.9.3 Add Dynamic Capacity Response (Opcode 4802h) */
+/* CXL spec: Updated Extent Entry = 24 bytes (start_dpa + len + rsvd[8]) */
 struct cxlmi_cmd_memdev_add_dc_response_req {
 	uint32_t updated_extent_list_size;
 	uint8_t flags;
@@ -663,6 +664,7 @@ struct cxlmi_cmd_memdev_add_dc_response_req {
 } __attribute__((packed));
 
 /* CXL r3.1 Section 8.2.9.9.9.4 Release Dynamic Capacity (Opcode 4803h) */
+/* CXL spec: Updated Extent Entry = 24 bytes (start_dpa + len + rsvd[8]) */
 struct cxlmi_cmd_memdev_release_dc_req {
 	uint32_t updated_extent_list_size;
 	uint8_t flags;
