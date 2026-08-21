@@ -32,6 +32,7 @@ typedef uint32_t u32;
 
 #define DLCFG_CFG_DEV       1
 #define DLCFG_CFG_DDR       2
+#define DLCFG_CFG_PCIE      3
 
 #define DLCFG_ACTION_FULL     0x0
 #define DLCFG_ACTION_INIT     0x1
@@ -39,7 +40,7 @@ typedef uint32_t u32;
 #define DLCFG_ACTION_END      0x3
 
 #define VU_DLCFG_USAGE \
-	"vu-dlcfg --input <file> --cfg-type <DEV|DDR> [--chunk-size <n>]"
+	"vu-dlcfg --input <file> --cfg-type <DEV|DDR|PCIE> [--chunk-size <n>]"
 
 static int parse_cfg_type(const char *name, uint32_t *cfg_type_out)
 {
@@ -51,17 +52,23 @@ static int parse_cfg_type(const char *name, uint32_t *cfg_type_out)
 		*cfg_type_out = DLCFG_CFG_DDR;
 		return 0;
 	}
+	if (strcmp(name, "PCIE") == 0) {
+		*cfg_type_out = DLCFG_CFG_PCIE;
+		return 0;
+	}
 	fprintf(stderr,
-		"vu-dlcfg: unknown --cfg-type '%s' (valid: DEV, DDR)\n", name);
+		"vu-dlcfg: unknown --cfg-type '%s' (valid: DEV, DDR, PCIE)\n",
+		name);
 	return -1;
 }
 
 static const char *cfg_type_name(uint32_t cfg_type)
 {
 	switch (cfg_type) {
-	case DLCFG_CFG_DEV: return "DEV";
-	case DLCFG_CFG_DDR: return "DDR";
-	default:            return "?";
+	case DLCFG_CFG_DEV:  return "DEV";
+	case DLCFG_CFG_DDR:  return "DDR";
+	case DLCFG_CFG_PCIE: return "PCIE";
+	default:             return "?";
 	}
 }
 
@@ -151,7 +158,7 @@ int parse_vu_dlcfg_req(int argc, char **argv, struct vu_dlcfg_params *params)
 		fprintf(stderr, "Usage: %s\n", VU_DLCFG_USAGE);
 		fprintf(stderr,
 			"  --input      configuration file (binary)\n"
-			"  --cfg-type   DEV or DDR\n"
+			"  --cfg-type   DEV, DDR, or PCIE\n"
 			"  --chunk-size chunk size (default %u, must be 4-byte aligned)\n",
 			DLCFG_CHUNK_DEFAULT);
 		return -1;

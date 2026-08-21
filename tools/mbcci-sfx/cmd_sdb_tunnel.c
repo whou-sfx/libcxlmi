@@ -7090,7 +7090,7 @@ int cmd_sdb_tunnel(struct cxlmi_endpoint *ep, int argc, char **argv)
 			"  get-fw-info        [--port <vdm0|vdm1|i3c>]                        Get FW Info (0x0200)\n"
 			"  transfer-fw        [--port <vdm0|vdm1|i3c>] --input <file> --slot <n> [--chunk-size <n>]\n"
 			"                                                                         Transfer FW (0x0201)\n"
-			"  vu-dlcfg           [--port <vdm0|vdm1|i3c>] --input <file> --cfg-type <DEV|DDR> [--chunk-size <n>]\n"
+			"  vu-dlcfg           [--port <vdm0|vdm1|i3c>] --input <file> --cfg-type <DEV|DDR|PCIE> [--chunk-size <n>]\n"
 			"                                                                         VU Download Config (0xCC53/0x07)\n"
 			"  vu-getdevcfg       [--port <vdm0|vdm1|i3c>] --output <file>\n"
 			"                                                                         VU Get DEV Config (0xCC53/0x08)\n"

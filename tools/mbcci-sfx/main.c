@@ -73,7 +73,7 @@ static const struct subcmd subcmds[] = {
 	{ "vu-eccrmwinj",              cmd_vu_eccrmwinj,
 	  "VU ECC RMW Inject (0xCC53/0x011b) --op <1bit|cecc|uecc|clear> --dpa <hex>" },
 	{ "vu-dlcfg",                  cmd_vu_dlcfg,
-	  "VU Download Config (0xCC53/0x07) --input <file> --cfg-type <DEV|DDR> [--chunk-size <n>]" },
+	  "VU Download Config (0xCC53/0x07) --input <file> --cfg-type <DEV|DDR|PCIE> [--chunk-size <n>]" },
 	{ "vu-getdevcfg",              cmd_vu_getdevcfg,
 	  "VU Get DEV Config (0xCC53/0x08) --output <file>" },
 	{ "vu-ddrfreq",                cmd_vu_ddrfreq,
