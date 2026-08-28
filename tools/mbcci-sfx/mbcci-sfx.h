@@ -224,6 +224,39 @@ int vu_pciespeed_send(struct cxlmi_endpoint *ep,
 int cmd_vu_ddrfreq(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_vu_pciespeed(struct cxlmi_endpoint *ep, int argc, char **argv);
 
+/*
+ * VU Download FW Union (0xCC53/0x0241) and VU PT Update (0xCC53/0x0242).
+ * Mirrors fw_download_union()/fw_pt_update() from cxl_test_tool's
+ * cxl_vu_download.cpp.
+ */
+#define VU_DLUNION_IMAGE_SOC_RT_BL2 1u
+#define VU_DLUNION_IMAGE_UNION      255u
+
+#define VU_DLUNION_PARTITION_NONE 0u
+#define VU_DLUNION_PARTITION_A    1u
+#define VU_DLUNION_PARTITION_B    2u
+
+struct vu_dlunion_params {
+	const char *input_file;
+	uint32_t image;      /* VU_DLUNION_IMAGE_SOC_RT_BL2 or _UNION */
+	uint32_t partition;  /* VU_DLUNION_PARTITION_{NONE,A,B} */
+};
+
+int parse_vu_dlunion_req(int argc, char **argv,
+			 struct vu_dlunion_params *params);
+int vu_dlunion_download(struct cxlmi_endpoint *ep,
+			const struct vu_dlunion_params *params);
+int cmd_vu_dlunion(struct cxlmi_endpoint *ep, int argc, char **argv);
+
+#define VU_DLPT_SIZE 256u
+
+struct vu_dlpt_params {
+	const char *input_file;
+};
+
+int parse_vu_dlpt_req(int argc, char **argv, struct vu_dlpt_params *params);
+int cmd_vu_dlpt(struct cxlmi_endpoint *ep, int argc, char **argv);
+
 int cmd_get_supported_logs(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log(struct cxlmi_endpoint *ep, int argc, char **argv);
 int cmd_get_log_cap(struct cxlmi_endpoint *ep, int argc, char **argv);

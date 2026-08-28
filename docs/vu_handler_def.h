@@ -46,8 +46,22 @@ enum VU_0xCC53_CMD_ID_E {
 	GETCFG                                                          = 0x08U,
 	CFGFREQ                                                         = 0x09U,
 	CFGPCIE                                                         = 0x0aU,
-	SHOWCFGINFO                                                     = 0x0cU,
+	CFGMAT                                                          = 0x0bU,
 	DDRINFO                                                         = 0x0dU,
+	DDRDUMP                                                         = 0x0140U,
+	DDRMRR                                                          = 0x0141U,
+	DDRRCW                                                          = 0x0142U,
+	SPDDUMP                                                         = 0x0143U,
+	SPDPROG                                                         = 0x0144U,
+	PMICDUMP                                                        = 0x0145U,
+	DDRATE                                                          = 0x0146U,
+	DDRCFGE                                                         = 0x0147U,
+	DDRTLOG                                                         = 0x0148U,
+	DDRCFGI                                                         = 0x0149U,
+	DDRCFGB                                                         = 0x014aU,
+	DDRDIAG                                                         = 0x014bU,
+	DDRDTO                                                          = 0x014cU,
+	DDRATO                                                          = 0x014dU,
 	HOSTLOGDBG                                                      = 0x0eU,
 	MBOXLEGACY                                                      = 0x0fU,
 	MCUMBOXDRVDBG                                                   = 0x10U,
@@ -55,6 +69,9 @@ enum VU_0xCC53_CMD_ID_E {
 	MBOXCLIENTDBG                                                   = 0x12U,
 	INFLOGSW                                                        = 0x13U,
 	SECMBOXAER                                                      = 0x14U,
+	LOGGERDEBUG                                                     = 0x15U,
+	NORFSDEBUG                                                      = 0x16U,
+	IPCDEBUG                                                        = 0x17U,
 	//For Group: Task Scheduler
 	TOP                                                             = 0x0040U,
 	//For Group: Debug
@@ -68,7 +85,6 @@ enum VU_0xCC53_CMD_ID_E {
 	DDRTASKTEST                                                     = 0x012aU,
 	DDRGDMA                                                         = 0x010aU,
 	DDRREG                                                          = 0x010bU,
-	CXLDUMP                                                         = 0x010cU,
 	MEM                                                             = 0x010dU,
 	DDRMAPDT                                                        = 0x0116U,
 	DDRWI                                                           = 0x0117U,
@@ -93,6 +109,13 @@ enum VU_0xCC53_CMD_ID_E {
 	DDRCHBAD                                                        = 0x0127U,
 	DDRCHGRAN                                                       = 0x0128U,
 	EVTADD                                                          = 0x0129U,
+	DUMPLINK                                                        = 0x012aU,
+	FSMTRACKCLR                                                     = 0x012bU,
+	FSMTRACKSTART                                                   = 0x012cU,
+	FSMTRACKDUMP                                                    = 0x012dU,
+	DUMPSUBSYS                                                      = 0x012eU,
+	DUMPLTSSM                                                       = 0x012fU,
+	DUMPPHY                                                         = 0x0130U,
 	//For Group: CPMU
 	CPMUREAD                                                        = 0x0222U,
 	CPMUCLEAR                                                       = 0x0223U,
@@ -110,11 +133,21 @@ enum VU_0xCC53_CMD_ID_E {
 	NORREAD                                                         = 0x0238U,
 	NORWRITE                                                        = 0x0239U,
 	NORERASE                                                        = 0x023bU,
+	NORTEST                                                         = 0x0243U,
 	//For Group: Fw Update
 	ONLINE                                                          = 0x023aU,
 	PTSHOW                                                          = 0x023cU,
+	FWDOWNLOAD                                                      = 0x0241U,
+	PTUPDATE                                                        = 0x0242U,
+	CLRIMG                                                          = 0x0243U,
+	//For Group: PLDM telemetry
+	SETSENSOR                                                       = 0x023dU,
+	GETSENSOR                                                       = 0x023eU,
+	SENSORSHOW                                                      = 0x023fU,
 	//For Group: TIMER
 	DATE                                                            = 0x0240U,
+	//For Group: VDM
+	VDMCACHE                                                        = 0x0250U,
 };
 
 #ifndef MBCCI_SFX_BUILD
@@ -455,7 +488,7 @@ typedef union
 
 
 
-// For VU: showcfginfo
+// For VU: cfgmat
 // The VU command parameter definition, dw10~14 and cqe[0/1] definition
 typedef struct
 {
@@ -463,25 +496,28 @@ typedef struct
 	 u32	status;
 	 u32	in_sz;
 	 u32	out_sz;
-	 u32	slot;
+	 u32	arg1;
 	 u32	arg2;
 	 u32	arg3;
 	 u32	arg4;
-} showcfginfo;
+} cfgmat;
 // The VU input command data definition
 typedef struct 
 {
-}  __packed showcfginfo_input;
+	char        mn[32];
+	char        sn[8];
+	unsigned char          uuid[16];
+}  __packed cfgmat_input;
 // The VU output command data definition
 typedef struct 
 {
-}  __packed showcfginfo_output;
+}  __packed cfgmat_output;
 // The VU command data definition
 typedef union 
 {
-	showcfginfo_input *input;
-	showcfginfo_output *output;
-}  __packed showcfginfo_data;
+	cfgmat_input *input;
+	cfgmat_output *output;
+}  __packed cfgmat_data;
 
 
 
@@ -513,6 +549,440 @@ typedef union
 	ddrinfo_input *input;
 	ddrinfo_output *output;
 }  __packed ddrinfo_data;
+
+
+
+
+// For VU: ddrdump
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrdump;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrdump_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrdump_output;
+// The VU command data definition
+typedef union 
+{
+	ddrdump_input *input;
+	ddrdump_output *output;
+}  __packed ddrdump_data;
+
+
+
+
+// For VU: ddrmrr
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrmrr;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrmrr_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrmrr_output;
+// The VU command data definition
+typedef union 
+{
+	ddrmrr_input *input;
+	ddrmrr_output *output;
+}  __packed ddrmrr_data;
+
+
+
+
+// For VU: ddrrcw
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrrcw;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrrcw_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrrcw_output;
+// The VU command data definition
+typedef union 
+{
+	ddrrcw_input *input;
+	ddrrcw_output *output;
+}  __packed ddrrcw_data;
+
+
+
+
+// For VU: spddump
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} spddump;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed spddump_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed spddump_output;
+// The VU command data definition
+typedef union 
+{
+	spddump_input *input;
+	spddump_output *output;
+}  __packed spddump_data;
+
+
+
+
+// For VU: spdprog
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} spdprog;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed spdprog_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed spdprog_output;
+// The VU command data definition
+typedef union 
+{
+	spdprog_input *input;
+	spdprog_output *output;
+}  __packed spdprog_data;
+
+
+
+
+// For VU: pmicdump
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} pmicdump;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed pmicdump_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed pmicdump_output;
+// The VU command data definition
+typedef union 
+{
+	pmicdump_input *input;
+	pmicdump_output *output;
+}  __packed pmicdump_data;
+
+
+
+
+// For VU: ddrate
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrate;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrate_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrate_output;
+// The VU command data definition
+typedef union 
+{
+	ddrate_input *input;
+	ddrate_output *output;
+}  __packed ddrate_data;
+
+
+
+
+// For VU: ddrcfge
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrcfge;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrcfge_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrcfge_output;
+// The VU command data definition
+typedef union 
+{
+	ddrcfge_input *input;
+	ddrcfge_output *output;
+}  __packed ddrcfge_data;
+
+
+
+
+// For VU: ddrtlog
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	hdtctrl;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrtlog;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrtlog_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrtlog_output;
+// The VU command data definition
+typedef union 
+{
+	ddrtlog_input *input;
+	ddrtlog_output *output;
+}  __packed ddrtlog_data;
+
+
+
+
+// For VU: ddrcfgi
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrcfgi;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrcfgi_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrcfgi_output;
+// The VU command data definition
+typedef union 
+{
+	ddrcfgi_input *input;
+	ddrcfgi_output *output;
+}  __packed ddrcfgi_data;
+
+
+
+
+// For VU: ddrcfgb
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrcfgb;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrcfgb_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrcfgb_output;
+// The VU command data definition
+typedef union 
+{
+	ddrcfgb_input *input;
+	ddrcfgb_output *output;
+}  __packed ddrcfgb_data;
+
+
+
+
+// For VU: ddrdiag
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrdiag;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrdiag_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrdiag_output;
+// The VU command data definition
+typedef union 
+{
+	ddrdiag_input *input;
+	ddrdiag_output *output;
+}  __packed ddrdiag_data;
+
+
+
+
+// For VU: ddrdto
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrdto;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrdto_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrdto_output;
+// The VU command data definition
+typedef union 
+{
+	ddrdto_input *input;
+	ddrdto_output *output;
+}  __packed ddrdto_data;
+
+
+
+
+// For VU: ddrato
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrato;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrato_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrato_output;
+// The VU command data definition
+typedef union 
+{
+	ddrato_input *input;
+	ddrato_output *output;
+}  __packed ddrato_data;
 
 
 
@@ -730,6 +1200,99 @@ typedef union
 	secmboxaer_input *input;
 	secmboxaer_output *output;
 }  __packed secmboxaer_data;
+
+
+
+
+// For VU: loggerdebug
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} loggerdebug;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed loggerdebug_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed loggerdebug_output;
+// The VU command data definition
+typedef union 
+{
+	loggerdebug_input *input;
+	loggerdebug_output *output;
+}  __packed loggerdebug_data;
+
+
+
+
+// For VU: norfsdebug
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} norfsdebug;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed norfsdebug_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed norfsdebug_output;
+// The VU command data definition
+typedef union 
+{
+	norfsdebug_input *input;
+	norfsdebug_output *output;
+}  __packed norfsdebug_data;
+
+
+
+
+// For VU: ipcdebug
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ipcdebug;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ipcdebug_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ipcdebug_output;
+// The VU command data definition
+typedef union 
+{
+	ipcdebug_input *input;
+	ipcdebug_output *output;
+}  __packed ipcdebug_data;
 
 
 
@@ -1075,37 +1638,6 @@ typedef union
 	ddrreg_input *input;
 	ddrreg_output *output;
 }  __packed ddrreg_data;
-
-
-
-
-// For VU: cxldump
-// The VU command parameter definition, dw10~14 and cqe[0/1] definition
-typedef struct
-{
-	 u32	vuCmdId;
-	 u32	status;
-	 u32	in_sz;
-	 u32	out_sz;
-	 u32	arg1;
-	 u32	arg2;
-	 u32	arg3;
-	 u32	arg4;
-} cxldump;
-// The VU input command data definition
-typedef struct 
-{
-}  __packed cxldump_input;
-// The VU output command data definition
-typedef struct 
-{
-}  __packed cxldump_output;
-// The VU command data definition
-typedef union 
-{
-	cxldump_input *input;
-	cxldump_output *output;
-}  __packed cxldump_data;
 
 
 
@@ -1854,6 +2386,223 @@ typedef union
 
 
 
+// For VU: dumplink
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} dumplink;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed dumplink_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed dumplink_output;
+// The VU command data definition
+typedef union 
+{
+	dumplink_input *input;
+	dumplink_output *output;
+}  __packed dumplink_data;
+
+
+
+
+// For VU: fsmtrackclr
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} fsmtrackclr;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed fsmtrackclr_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed fsmtrackclr_output;
+// The VU command data definition
+typedef union 
+{
+	fsmtrackclr_input *input;
+	fsmtrackclr_output *output;
+}  __packed fsmtrackclr_data;
+
+
+
+
+// For VU: fsmtrackstart
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} fsmtrackstart;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed fsmtrackstart_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed fsmtrackstart_output;
+// The VU command data definition
+typedef union 
+{
+	fsmtrackstart_input *input;
+	fsmtrackstart_output *output;
+}  __packed fsmtrackstart_data;
+
+
+
+
+// For VU: fsmtrackdump
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} fsmtrackdump;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed fsmtrackdump_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed fsmtrackdump_output;
+// The VU command data definition
+typedef union 
+{
+	fsmtrackdump_input *input;
+	fsmtrackdump_output *output;
+}  __packed fsmtrackdump_data;
+
+
+
+
+// For VU: dumpsubsys
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} dumpsubsys;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed dumpsubsys_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed dumpsubsys_output;
+// The VU command data definition
+typedef union 
+{
+	dumpsubsys_input *input;
+	dumpsubsys_output *output;
+}  __packed dumpsubsys_data;
+
+
+
+
+// For VU: dumpltssm
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} dumpltssm;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed dumpltssm_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed dumpltssm_output;
+// The VU command data definition
+typedef union 
+{
+	dumpltssm_input *input;
+	dumpltssm_output *output;
+}  __packed dumpltssm_data;
+
+
+
+
+// For VU: dumpphy
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} dumpphy;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed dumpphy_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed dumpphy_output;
+// The VU command data definition
+typedef union 
+{
+	dumpphy_input *input;
+	dumpphy_output *output;
+}  __packed dumpphy_data;
+
+
+
+
 // >>>>>   For Group: CPMU
 
 // For VU: cpmuread
@@ -2294,6 +3043,37 @@ typedef union
 
 
 
+// For VU: nortest
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	op;
+	 u32	seed;
+	 u32	arg3;
+	 u32	arg4;
+} nortest;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed nortest_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed nortest_output;
+// The VU command data definition
+typedef union 
+{
+	nortest_input *input;
+	nortest_output *output;
+}  __packed nortest_data;
+
+
+
+
 // >>>>>   For Group: Fw Update
 
 // For VU: online
@@ -2361,6 +3141,237 @@ typedef union
 
 
 
+// For VU: fwdownload
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	action;
+	 u32	session_or_partition;
+	 u32	package_offset;
+	 u32	sequence;
+} fwdownload;
+// The VU input command data definition
+typedef struct 
+{
+	unsigned char          payload[2016];
+}  __packed fwdownload_input;
+// The VU output command data definition
+typedef struct 
+{
+	u32         version;
+	u32         session_id;
+	u32         state;
+	u32         result;
+	u32         accepted_sequence;
+	u32         image_index;
+	u32         next_offset;
+	u32         next_length;
+	u32         received_bytes;
+	u32         total_bytes;
+	u32         retry_after_ms;
+}  __packed fwdownload_output;
+// The VU command data definition
+typedef union 
+{
+	fwdownload_input *input;
+	fwdownload_output *output;
+}  __packed fwdownload_data;
+
+
+
+
+// For VU: ptupdate
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	reserved0;
+	 u32	reserved1;
+	 u32	reserved2;
+	 u32	reserved3;
+} ptupdate;
+// The VU input command data definition
+typedef struct 
+{
+	unsigned char          pt[256];
+}  __packed ptupdate_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ptupdate_output;
+// The VU command data definition
+typedef union 
+{
+	ptupdate_input *input;
+	ptupdate_output *output;
+}  __packed ptupdate_data;
+
+
+
+
+// For VU: clrimg
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	reserved0;
+	 u32	reserved1;
+	 u32	reserved2;
+	 u32	reserved3;
+} clrimg;
+// The VU input command data definition
+typedef struct 
+{
+	unsigned char          pt[256];
+}  __packed clrimg_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed clrimg_output;
+// The VU command data definition
+typedef union 
+{
+	clrimg_input *input;
+	clrimg_output *output;
+}  __packed clrimg_data;
+
+
+
+
+// >>>>>   For Group: PLDM telemetry
+
+// For VU: setsensor
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	semantic_id;
+	 u32	value;
+	 u32	enable;
+	 u32	reserved;
+} setsensor;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed setsensor_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed setsensor_output;
+// The VU command data definition
+typedef union 
+{
+	setsensor_input *input;
+	setsensor_output *output;
+}  __packed setsensor_data;
+
+
+
+
+// For VU: getsensor
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	semantic_id;
+	 u32	reserved1;
+	 u32	reserved2;
+	 u32	reserved3;
+} getsensor;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed getsensor_input;
+// The VU output command data definition
+typedef struct 
+{
+	u32         semantic_id;
+	int         value;
+	u32         enable;
+}  __packed getsensor_output;
+// The VU command data definition
+typedef union 
+{
+	getsensor_input *input;
+	getsensor_output *output;
+}  __packed getsensor_data;
+
+
+
+
+// For VU: sensorshow
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	reserved1;
+	 u32	reserved2;
+	 u32	reserved3;
+	 u32	reserved4;
+} sensorshow;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed sensorshow_input;
+// The VU output command data definition
+typedef struct 
+{
+	unsigned short         semantic_id;
+	unsigned char          semantic_kind;
+	unsigned char          entity_type;
+	unsigned char          entity_number;
+	unsigned char          metric;
+	unsigned char          sensor_number;
+	unsigned short         flags;
+	unsigned char          sample_status;
+	unsigned char          operational_state;
+	char          unit_modifier;
+	unsigned char          present_state;
+	unsigned char          previous_state;
+	unsigned char          event_state;
+	unsigned char          reserved;
+	unsigned long long         value;
+}  __packed sensorshow_item;
+
+typedef struct 
+{
+	unsigned short         contract_version;
+	unsigned short         inventory_length;
+	unsigned char          status;
+	unsigned char          topology_kind;
+	unsigned short         item_count;
+	u32         inventory_revision;
+	sensorshow_item         items[16];
+}  __packed sensorshow_output;
+// The VU command data definition
+typedef union 
+{
+	sensorshow_input *input;
+	sensorshow_output *output;
+}  __packed sensorshow_data;
+
+
+
+
 // >>>>>   For Group: TIMER
 
 // For VU: date
@@ -2394,7 +3405,35 @@ typedef union
 
 
 
+// >>>>>   For Group: VDM
 
+// For VU: vdmcache
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	port;
+	 u32	is_pop;
+	 u32	arg3;
+	 u32	arg4;
+} vdmcache;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed vdmcache_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed vdmcache_output;
+// The VU command data definition
+typedef union 
+{
+	vdmcache_input *input;
+	vdmcache_output *output;
+}  __packed vdmcache_data;
 
 
 #ifndef MBCCI_SFX_BUILD
@@ -2437,6 +3476,7 @@ VU_STATUS_E vu_handler_cfgfreq(vector<string> *pargs __unused, cfgfreq *param __
 VU_STATUS_E vu_handler_showcfginfo(vector<string> *pargs __unused, showcfginfo *param __unused, showcfginfo_data *pdata __unused);
 // for VU: ddrinfo
 VU_STATUS_E vu_handler_ddrinfo(vector<string> *pargs __unused, ddrinfo *param __unused, ddrinfo_data *pdata __unused);
+
 // for VU: hostlogDbg
 VU_STATUS_E vu_handler_hostlogdbg(vector<string> *pargs __unused, hostlogdbg *param __unused, hostlogdbg_data *pdata __unused);
 // for VU: mboxlegacy
