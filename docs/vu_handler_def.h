@@ -116,6 +116,8 @@ enum VU_0xCC53_CMD_ID_E {
 	DUMPSUBSYS                                                      = 0x012eU,
 	DUMPLTSSM                                                       = 0x012fU,
 	DUMPPHY                                                         = 0x0130U,
+	DDRDPARW                                                        = 0x0131U,
+	DDRDBT                                                          = 0x0132U,
 	//For Group: CPMU
 	CPMUREAD                                                        = 0x0222U,
 	CPMUCLEAR                                                       = 0x0223U,
@@ -2603,6 +2605,69 @@ typedef union
 
 
 
+// For VU: ddrdparw
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrdparw;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrdparw_input;
+// The VU output command data definition
+typedef struct 
+{
+	unsigned char          data[64];
+}  __packed ddrdparw_output;
+// The VU command data definition
+typedef union 
+{
+	ddrdparw_input *input;
+	ddrdparw_output *output;
+}  __packed ddrdparw_data;
+
+
+
+
+// For VU: ddrdbt
+// The VU command parameter definition, dw10~14 and cqe[0/1] definition
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	arg1;
+	 u32	arg2;
+	 u32	arg3;
+	 u32	arg4;
+} ddrdbt;
+// The VU input command data definition
+typedef struct 
+{
+}  __packed ddrdbt_input;
+// The VU output command data definition
+typedef struct 
+{
+}  __packed ddrdbt_output;
+// The VU command data definition
+typedef union 
+{
+	ddrdbt_input *input;
+	ddrdbt_output *output;
+}  __packed ddrdbt_data;
+
+
+
+
 // >>>>>   For Group: CPMU
 
 // For VU: cpmuread
@@ -3567,6 +3632,10 @@ VU_STATUS_E vu_handler_ddrchbad(vector<string> *pargs __unused, ddrchbad *param 
 VU_STATUS_E vu_handler_ddrchgran(vector<string> *pargs __unused, ddrchgran *param __unused, ddrchgran_data *pdata __unused);
 // for VU: evtadd
 VU_STATUS_E vu_handler_evtadd(vector<string> *pargs __unused, evtadd *param __unused, evtadd_data *pdata __unused);
+// for VU: ddrdparw
+VU_STATUS_E vu_handler_ddrdparw(vector<string> *pargs __unused, ddrdparw *param __unused, ddrdparw_data *pdata __unused);
+// for VU: ddrdbt
+VU_STATUS_E vu_handler_ddrdbt(vector<string> *pargs __unused, ddrdbt *param __unused, ddrdbt_data *pdata __unused);
 
 // >>>>>   For Group: CPMU
 // for VU: cpmuread
