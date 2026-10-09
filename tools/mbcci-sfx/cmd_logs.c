@@ -89,6 +89,12 @@ static uint16_t read_le16(const uint8_t *p)
 	return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
 }
 
+static uint32_t read_le32(const uint8_t *p)
+{
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+	       ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
 static uint64_t read_le64(const uint8_t *p)
 {
 	return (uint64_t)p[0] |
@@ -150,27 +156,55 @@ static void print_ddr5_ecs_log(const uint8_t *buf, uint32_t length)
 	}
 }
 
+/* CXL 3.2 Table 8-93 Execution Time bits[3:0]. */
+static const char *mt_exec_time_scale(uint8_t scale)
+{
+	switch (scale) {
+	case 1: return "10ms";
+	case 2: return "100ms";
+	case 3: return "1s";
+	case 4: return "10s";
+	case 5: return "100s";
+	case 6: return "1000s";
+	default: return "reserved";
+	}
+}
+
+/* Use the header count when it fits; otherwise walk every whole entry. */
+static uint32_t mt_entry_count(uint8_t reported, uint32_t avail)
+{
+	if (reported == 0 || reported > avail)
+		return avail;
+	return reported;
+}
+
 static void print_media_test_capability_log(const uint8_t *buf, uint32_t length)
 {
 	const uint32_t header_sz = 16;
 	const uint32_t entry_sz = 16;
-	uint32_t entries, i;
+	uint32_t avail, n, i;
 
 	if (length < header_sz) {
 		printf("Media Test Capability log: payload too short (%u)\n", length);
 		return;
 	}
 
-	entries = (length - header_sz) / entry_sz;
-	printf("Media Test Capability log decode:\n");
-	printf("  Header[0:15] raw, entries (from size): %u\n", entries);
+	avail = (length - header_sz) / entry_sz;
+	n = mt_entry_count(buf[0], avail);
+	printf("Media Test Capability log decode (Table 8-93):\n");
+	printf("  num_supported_tests=%u long_ver=%u short_ver=%u caps=0x%02x\n",
+	       buf[0], buf[5], buf[6], buf[7]);
 
-	for (i = 0; i < entries; i++) {
+	for (i = 0; i < n; i++) {
 		const uint8_t *e = buf + header_sz + i * entry_sz;
-		uint16_t expected_time_s_per_gb = read_le16(e + 2);
+		uint8_t scale = e[3] & 0x0f;
+		uint8_t value = e[3] >> 4;
 
-		printf("  [%u] algo=0x%02x flags=0x%02x expected_time_s_per_gb=%u\n",
-		       i, e[0], e[1], expected_time_s_per_gb);
+		printf("  [%u] test_id=0x%04x algo=0x%02x exec_time=0x%02x "
+		       "(scale=%u/%s value=%u) caps=0x%04x patterns=0x%04x\n",
+		       i, read_le16(e), e[2], e[3],
+		       scale, mt_exec_time_scale(scale), value,
+		       read_le16(e + 4), read_le16(e + 6));
 	}
 }
 
@@ -178,70 +212,79 @@ static void print_media_test_result_short_log(const uint8_t *buf, uint32_t lengt
 {
 	const uint32_t header_sz = 16;
 	const uint32_t entry_sz = 32;
-	uint32_t entries, i;
+	uint32_t avail, n, i;
 
 	if (length < header_sz) {
 		printf("Media Test Result Short log: payload too short (%u)\n", length);
 		return;
 	}
 
-	entries = (length - header_sz) / entry_sz;
-	printf("Media Test Result Short log decode:\n");
-	printf("  Header[0:15] raw, entries (from size): %u\n", entries);
+	avail = (length - header_sz) / entry_sz;
+	n = mt_entry_count(buf[0], avail);
+	printf("Media Test Result Short log decode (Table 8-96):\n");
+	printf("  num_tests=%u version=%u result=0x%02x\n",
+	       buf[0], buf[1], buf[2]);
 
-	for (i = 0; i < entries; i++) {
+	for (i = 0; i < n; i++) {
 		const uint8_t *e = buf + header_sz + i * entry_sz;
-		uint64_t start_time = read_le64(e + 0x08);
-		uint64_t end_time = read_le64(e + 0x10);
 
-		printf("  [%u] status=0x%02x flags=0x%02x start_time=%" PRIu64
-		       " end_time=%" PRIu64 "\n",
-		       i, e[0], e[1], start_time, end_time);
+		printf("  [%u] test_id=0x%04x start=%" PRIu64 " end=%" PRIu64
+		       " result=0x%02x flags=0x%02x ue=%u ce=%u\n",
+		       i, read_le16(e),
+		       read_le64(e + 0x02), read_le64(e + 0x0a),
+		       e[0x12], e[0x13],
+		       read_le32(e + 0x14), read_le32(e + 0x18));
 	}
 }
 
 static void print_media_test_result_long_log(const uint8_t *buf, uint32_t length)
 {
 	const uint32_t header_sz = 16;
-	const uint32_t summary_sz = 48;
-	const uint32_t sig_sz = 80;
-	uint16_t task_status, error_count;
-	uint64_t start_time, end_time;
-	uint64_t range_start, range_len;
-	uint32_t remaining, sig_count, i;
-	const uint8_t *summary;
+	const uint32_t entry_hdr = 0x30;
+	const uint32_t sig_sz = 0x50;
+	uint32_t off, idx;
 
-	if (length < header_sz + summary_sz) {
+	if (length < header_sz) {
 		printf("Media Test Result Long log: payload too short (%u)\n", length);
 		return;
 	}
 
-	summary = buf + header_sz;
-	task_status = read_le16(summary + 0x00);
-	error_count = read_le16(summary + 0x02);
-	start_time = read_le64(summary + 0x08);
-	end_time = read_le64(summary + 0x10);
-	range_start = read_le64(summary + 0x18);
-	range_len = read_le64(summary + 0x20);
+	printf("Media Test Result Long log decode (Table 8-99):\n");
+	printf("  num_tests=%u version=%u result=0x%02x\n",
+	       buf[0], buf[1], buf[2]);
 
-	remaining = length - (header_sz + summary_sz);
-	sig_count = remaining / sig_sz;
+	off = header_sz;
+	for (idx = 0; off + entry_hdr <= length && idx < 64; idx++) {
+		const uint8_t *e = buf + off;
+		uint32_t n_sig = read_le32(e + 0x28);
+		uint32_t room = length - off;
+		uint32_t max_sig = (room - entry_hdr) / sig_sz;
+		uint32_t s;
 
-	printf("Media Test Result Long log decode:\n");
-	printf("  task_status=0x%04x error_count=%u start_time=%" PRIu64
-	       " end_time=%" PRIu64 "\n",
-	       task_status, error_count, start_time, end_time);
-	printf("  test_range_start=0x%016" PRIx64 " test_range_len=0x%016" PRIx64
-	       " signatures=%u\n",
-	       range_start, range_len, sig_count);
+		if (n_sig > max_sig)
+			n_sig = max_sig;
 
-	for (i = 0; i < sig_count; i++) {
-		const uint8_t *s = buf + header_sz + summary_sz + i * sig_sz;
-		uint64_t failed_dpa = read_le64(s + 0x00);
-		uint16_t error_type = read_le16(s + 0x08);
+		printf("  [%u] test_id=0x%04x start=%" PRIu64 " end=%" PRIu64
+		       " result=0x%02x flags=0x%02x ue=%u ce=%u"
+		       " capacity_tested_256mb=%" PRIu64 " signatures=%u\n",
+		       idx, read_le16(e),
+		       read_le64(e + 0x02), read_le64(e + 0x0a),
+		       e[0x12], e[0x13],
+		       read_le32(e + 0x14), read_le32(e + 0x18),
+		       read_le64(e + 0x20), n_sig);
 
-		printf("  [%u] failed_dpa=0x%016" PRIx64 " error_type=0x%04x\n",
-		       i, failed_dpa, error_type);
+		for (s = 0; s < n_sig; s++) {
+			const uint8_t *sig = e + entry_hdr + s * sig_sz;
+			uint64_t phys = read_le64(sig + 0x02);
+
+			printf("    sig[%u] iter=%u volatile=%u err_type=%u dpa=0x%016" PRIx64 "\n",
+			       s, read_le16(sig),
+			       (unsigned)(phys & 1),
+			       (unsigned)((phys >> 1) & 3),
+			       phys >> 6);
+		}
+
+		off += entry_hdr + n_sig * sig_sz;
 	}
 }
 
