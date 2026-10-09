@@ -71,7 +71,7 @@ static const struct subcmd subcmds[] = {
 	{ "vu-evtadd",                 cmd_vu_evtadd,
 	  "VU Inject Event (0xCC53/0x0129) --loglvl <0-3> --intfmask <hex> --count <n>" },
 	{ "vu-eccrmwinj",              cmd_vu_eccrmwinj,
-	  "VU ECC RMW Inject (0xCC53/0x011b) --op <1bit|cecc|uecc|clear> --dpa <hex>" },
+	  "VU ECC RMW Inject (0xCC53/0x011b) --op <1bit|cecc|uecc|clear> (--dpa <hex> | --fru <n> --off <hex> | --rank <n> --off <hex> | --rank <n> --row <n> | --rank <n> --codeword <n>)" },
 	{ "vu-ddrdparw",               cmd_vu_ddrdparw,
 	  "VU DPA 64B R/W (0xCC53/0x0131) --op <wr|rd> --dpa <hex> [--pat <hex>]" },
 	{ "vu-ddrdbt",                 cmd_vu_ddrdbt,
