@@ -148,6 +148,8 @@ enum VU_0xCC53_CMD_ID_E {
 	SENSORSHOW                                                      = 0x023fU,
 	//For Group: TIMER
 	DATE                                                            = 0x0240U,
+	//For Group: System Diagnosis
+	DIMMINFO                                                        = 0x024FU,
 	//For Group: VDM
 	VDMCACHE                                                        = 0x0250U,
 };
@@ -3501,6 +3503,39 @@ typedef union
 }  __packed vdmcache_data;
 
 
+
+// For VU: dimminfo
+// Mailbox: arg1=dimm. Output is 100 bytes (u16 + u16 + 32 + 16 + 16 + 32).
+typedef struct
+{
+	 u32	vuCmdId;
+	 u32	status;
+	 u32	in_sz;
+	 u32	out_sz;
+	 u32	dimm;
+	 u32	reserved1;
+	 u32	reserved2;
+	 u32	reserved3;
+} dimminfo;
+typedef struct
+{
+}  __packed dimminfo_input;
+typedef struct
+{
+	unsigned short capacity_gb;
+	unsigned short speed_mts;
+	char           module[32];
+	char           module_mfr[16];
+	char           dram_mfr[16];
+	char           part_number[32];
+}  __packed dimminfo_output;
+typedef union
+{
+	dimminfo_input *input;
+	dimminfo_output *output;
+}  __packed dimminfo_data;
+
+
 #ifndef MBCCI_SFX_BUILD
 //
 //
@@ -3680,6 +3715,8 @@ VU_STATUS_E vu_handler_ptshow(vector<string> *pargs __unused, ptshow *param __un
 // >>>>>   For Group: TIMER
 // for VU: date
 VU_STATUS_E vu_handler_date(vector<string> *pargs __unused, date *param __unused, date_data *pdata __unused);
+// for VU: dimminfo
+VU_STATUS_E vu_handler_dimminfo(vector<string> *pargs __unused, dimminfo *param __unused, dimminfo_data *pdata __unused);
 
 // dispatch VU function
 VU_STATUS_E dispatch_uart_cmd(vector<string> *pargs);

@@ -76,6 +76,8 @@ static const struct subcmd subcmds[] = {
 	  "VU DPA 64B R/W (0xCC53/0x0131) --op <wr|rd> --dpa <hex> [--pat <hex>]" },
 	{ "vu-ddrdbt",                 cmd_vu_ddrdbt,
 	  "VU DBT skip-WI (0xCC53/0x0132) --enable <0|1>" },
+	{ "vu-dimminfo",               cmd_vu_dimminfo,
+	  "VU DIMM SPD info (0xCC53/0x024F) --dimm <n>" },
 	{ "vu-dlcfg",                  cmd_vu_dlcfg,
 	  "VU Download Config (0xCC53/0x07) --input <file> --cfg-type <DEV|DDR|PCIE> [--chunk-size <n>]" },
 	{ "vu-getdevcfg",              cmd_vu_getdevcfg,

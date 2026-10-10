@@ -23,6 +23,7 @@ executable(
         'cmd_vu_eccrmwinj.c',
         'cmd_vu_ddrdparw.c',
         'cmd_vu_ddrdbt.c',
+        'cmd_vu_dimminfo.c',
         'cmd_vu_dlcfg.c',
         'cmd_vu_dlunion.c',
         'cmd_vu_dlpt.c',
