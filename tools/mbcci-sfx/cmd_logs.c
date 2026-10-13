@@ -39,10 +39,20 @@ static const uint8_t media_test_long_log_uuid[16] = {
 	0xa2, 0x4e, 0xa6, 0xaa, 0xbb, 0xfe, 0x58, 0x7a
 };
 
-/* Known log UUIDs from CXL spec (Generic-Component-Commands.md). */
+/*
+ * Known log UUIDs, kept in sync with the FW supported log table
+ * (g_sup_log_ids in cci/generic_component_cmd/cxl_log.cpp).
+ * cap holds the FW-declared Get Log Capabilities (0402h) parameter flags.
+ */
+#define LOG_CAP_CLEAR		0x01
+#define LOG_CAP_POPULATE	0x02
+#define LOG_CAP_AUTO_POPULATE	0x04
+#define LOG_CAP_PERSIST_COLD	0x08
+
 struct uuid_name {
 	uint8_t     uuid[16];
 	const char *name;
+	uint32_t    cap;
 };
 
 /*
@@ -52,36 +62,62 @@ struct uuid_name {
 static const struct uuid_name known_uuids[] = {
 	{ { 0x0d, 0xa9, 0xc0, 0xb5, 0xbf, 0x41, 0x4b, 0x78,
 	    0x8f, 0x79, 0x96, 0xb1, 0x62, 0x3b, 0x3f, 0x17 },
-	  "Command Effects Log (CEL)" },
+	  "Command Effects Log (CEL)", 0 },
 	{ { 0x5e, 0x18, 0x19, 0xd9, 0x11, 0xa9, 0x40, 0x0c,
 	    0x81, 0x1f, 0xd6, 0x07, 0x19, 0x40, 0x3d, 0x86 },
-	  "Vendor Debug Log" },
+	  "Vendor Debug Log",
+	  LOG_CAP_CLEAR | LOG_CAP_AUTO_POPULATE | LOG_CAP_PERSIST_COLD },
 	{ { 0xb3, 0xfa, 0xb4, 0xcf, 0x01, 0xb6, 0x43, 0x32,
 	    0x94, 0x3e, 0x5e, 0x99, 0x62, 0xf2, 0x35, 0x67 },
-	  "Component State Dump Log" },
+	  "Component State Dump Log",
+	  LOG_CAP_CLEAR | LOG_CAP_POPULATE | LOG_CAP_AUTO_POPULATE |
+	  LOG_CAP_PERSIST_COLD },
 	{ { 0xf1, 0x72, 0x0d, 0x60, 0xa7, 0xa9, 0x43, 0x06,
 	    0xa0, 0x03, 0x11, 0x94, 0x8f, 0x9e, 0x07, 0x7c },
-	  "DDR5 Error Check Scrub (ECS) Log" },
+	  "DDR5 Error Check Scrub (ECS) Log",
+	  LOG_CAP_CLEAR | LOG_CAP_POPULATE | LOG_CAP_AUTO_POPULATE |
+	  LOG_CAP_PERSIST_COLD },
 	{ { 0xe6, 0xdf, 0xa3, 0x2c, 0xd1, 0x3e, 0x4a, 0x5c,
 	    0x8c, 0xa8, 0x99, 0xbe, 0xbb, 0xf7, 0x31, 0xa4 },
-	  "Media Test Capability Log" },
+	  "Media Test Capability Log",
+	  LOG_CAP_CLEAR | LOG_CAP_POPULATE | LOG_CAP_AUTO_POPULATE |
+	  LOG_CAP_PERSIST_COLD },
 	{ { 0x2c, 0x25, 0x55, 0x22, 0x8c, 0xe4, 0x11, 0xec,
 	    0xb9, 0x09, 0x02, 0x42, 0xac, 0x12, 0x00, 0x02 },
-	  "Media Test Results Short Log" },
+	  "Media Test Results Short Log",
+	  LOG_CAP_CLEAR | LOG_CAP_AUTO_POPULATE | LOG_CAP_PERSIST_COLD },
 	{ { 0xc1, 0xfe, 0x0b, 0x3e, 0x7a, 0x00, 0x44, 0x8e,
 	    0xa2, 0x4e, 0xa6, 0xaa, 0xbb, 0xfe, 0x58, 0x7a },
-	  "Media Test Results Long Log" },
+	  "Media Test Results Long Log",
+	  LOG_CAP_CLEAR | LOG_CAP_AUTO_POPULATE | LOG_CAP_PERSIST_COLD },
+	/* SFX vendor defined logs */
+	{ { 0xcc, 0x53, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 },
+	  "SFX FW Persist Warn/Err Log",
+	  LOG_CAP_CLEAR | LOG_CAP_AUTO_POPULATE | LOG_CAP_PERSIST_COLD },
+	{ { 0xcc, 0x53, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02 },
+	  "SFX FW Crash Log",
+	  LOG_CAP_CLEAR | LOG_CAP_POPULATE | LOG_CAP_AUTO_POPULATE |
+	  LOG_CAP_PERSIST_COLD },
 };
 
-static const char *lookup_uuid_name(const uint8_t *uuid)
+static const struct uuid_name *lookup_known_log(const uint8_t *uuid)
 {
 	size_t i;
 
 	for (i = 0; i < sizeof(known_uuids) / sizeof(known_uuids[0]); i++) {
 		if (memcmp(known_uuids[i].uuid, uuid, 16) == 0)
-			return known_uuids[i].name;
+			return &known_uuids[i];
 	}
-	return "unknown";
+	return NULL;
+}
+
+static const char *lookup_uuid_name(const uint8_t *uuid)
+{
+	const struct uuid_name *e = lookup_known_log(uuid);
+
+	return e ? e->name : "unknown";
 }
 
 static uint16_t read_le16(const uint8_t *p)
@@ -326,15 +362,26 @@ fetch_supported_logs(struct cxlmi_endpoint *ep)
 void print_supported_logs(const struct cxlmi_cmd_get_supported_logs_rsp *rsp)
 {
 	uint16_t n = rsp->num_supported_log_entries;
+	const struct uuid_name *e;
 	uint16_t i;
 
 	printf("Supported log entries: %u\n", n);
+	printf("  cap (FW table): C=clear P=populate A=auto-populate "
+	       "R=persist-across-cold-reset\n");
 	for (i = 0; i < n; i++) {
+		e = lookup_known_log(rsp->entries[i].uuid);
 		printf("  [%u] UUID: ", i);
 		print_log_uuid(rsp->entries[i].uuid);
-		printf("  log_size: %7u bytes  (%s)\n",
-		       rsp->entries[i].log_size,
-		       lookup_uuid_name(rsp->entries[i].uuid));
+		printf("  log_size: %7u bytes", rsp->entries[i].log_size);
+		if (e)
+			printf("  cap: %c%c%c%c",
+			       (e->cap & LOG_CAP_CLEAR) ? 'C' : '-',
+			       (e->cap & LOG_CAP_POPULATE) ? 'P' : '-',
+			       (e->cap & LOG_CAP_AUTO_POPULATE) ? 'A' : '-',
+			       (e->cap & LOG_CAP_PERSIST_COLD) ? 'R' : '-');
+		else
+			printf("  cap: ????");
+		printf("  (%s)\n", e ? e->name : "unknown");
 	}
 }
 

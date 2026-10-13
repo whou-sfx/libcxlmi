@@ -599,7 +599,7 @@ CXLMI_EXPORT int cxlmi_cmd_get_supported_logs(struct cxlmi_endpoint *ep,
 	struct cxlmi_cmd_get_supported_logs_rsp *rsp_pl;
 	struct cxlmi_cci_msg req;
 	_cleanup_free_ struct cxlmi_cci_msg *rsp;
-	int rc, i;
+	int rc, i, n;
 	ssize_t rsp_sz;
 
 	arm_cci_request(ep, &req, 0, LOGS, GET_SUPPORTED);
@@ -618,10 +618,16 @@ CXLMI_EXPORT int cxlmi_cmd_get_supported_logs(struct cxlmi_endpoint *ep,
 	rsp_pl = (struct cxlmi_cmd_get_supported_logs_rsp *)rsp->payload;
 	memset(ret, 0, sizeof(*ret));
 
-	ret->num_supported_log_entries =
-		le16_to_cpu(rsp_pl->num_supported_log_entries);
+	n = le16_to_cpu(rsp_pl->num_supported_log_entries);
+	if (n > CXLMI_MAX_SUPPORTED_LOGS) {
+		cxlmi_msg(ep->ctx, LOG_WARNING,
+			  "%d supported logs reported, truncating to %d\n",
+			  n, CXLMI_MAX_SUPPORTED_LOGS);
+		n = CXLMI_MAX_SUPPORTED_LOGS;
+	}
+	ret->num_supported_log_entries = n;
 
-	for (i = 0; i < rsp_pl->num_supported_log_entries; i++) {
+	for (i = 0; i < n; i++) {
 		memcpy(ret->entries[i].uuid, rsp_pl->entries[i].uuid,
 		       sizeof(rsp_pl->entries[i].uuid));
 		ret->entries[i].log_size =
@@ -819,7 +825,7 @@ cxlmi_cmd_get_supported_logs_sublist(struct cxlmi_endpoint *ep,
 	_cleanup_free_ struct cxlmi_cci_msg *req = NULL;
 	_cleanup_free_ struct cxlmi_cci_msg *rsp = NULL;
 	ssize_t req_sz, rsp_sz;
-	int i, rc = -1;
+	int i, n, rc = -1;
 
 	req_sz = sizeof(*req) + sizeof(*in);
 	req = calloc(1, req_sz);
@@ -845,12 +851,19 @@ cxlmi_cmd_get_supported_logs_sublist(struct cxlmi_endpoint *ep,
 	rsp_pl = (struct cxlmi_cmd_get_supported_logs_sublist_rsp *)rsp->payload;
 	memset(ret, 0, sizeof(*ret));
 
-	ret->num_supported_log_entries = rsp_pl->num_supported_log_entries;
+	n = rsp_pl->num_supported_log_entries;
+	if (n > CXLMI_MAX_SUPPORTED_LOGS) {
+		cxlmi_msg(ep->ctx, LOG_WARNING,
+			  "%d supported logs reported, truncating to %d\n",
+			  n, CXLMI_MAX_SUPPORTED_LOGS);
+		n = CXLMI_MAX_SUPPORTED_LOGS;
+	}
+	ret->num_supported_log_entries = n;
 	ret->total_num_supported_log_entries =
 		le16_to_cpu(rsp_pl->total_num_supported_log_entries);
 	ret->start_log_entry_index = rsp_pl->start_log_entry_index;
 
-	for (i = 0; i < rsp_pl->num_supported_log_entries; i++) {
+	for (i = 0; i < n; i++) {
 		memcpy(ret->entries[i].uuid, rsp_pl->entries[i].uuid,
 		       sizeof(rsp_pl->entries[i].uuid));
 		ret->entries[i].log_size =

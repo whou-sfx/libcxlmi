@@ -4616,6 +4616,12 @@ static void sdb_parse_supported_logs_rsp(
 
 	memset(host, 0, SDB_SUPPORTED_LOGS_RSP_SZ);
 	n = le16_to_cpu(wire->num_supported_log_entries);
+	if (n > CXLMI_MAX_SUPPORTED_LOGS) {
+		fprintf(stderr,
+			"sdb-tunnel: %u supported logs reported, truncating to %d\n",
+			n, CXLMI_MAX_SUPPORTED_LOGS);
+		n = CXLMI_MAX_SUPPORTED_LOGS;
+	}
 	host->num_supported_log_entries = n;
 
 	for (i = 0; i < n; i++) {
