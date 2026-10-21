@@ -123,3 +123,43 @@
 | 00h  | **Iteration**       | 2 字节 | 出错时所在的测试迭代。                                       |
 | 02h  | **Physical Address**| 8 字节 | bit0=volatile，bits[2:1]=错误类型，bits[63:6]=DPA。         |
 | 0Ah  | **Validity Flags**  | 2 字节 | 标明 Channel/Rank/Bank/Row 等字段是否有效。                  |
+
+
+
+### 5. Comonent State Dump Log
+
+ (UUID): `b3fab4cf-01b6-4332-943e-5e9962f23567`
+
+5.1 输入载荷 (Input Payload - Table 8-84)
+
+| 字节偏移 (Byte Offset) | 长度 (Bytes) | 字段名称 (Field Name) | 详细描述与取值 (Description & Value)                         |
+| ---------------------- | ------------ | --------------------- | ------------------------------------------------------------ |
+| **00h**                | `10h` (16B)  | **Log Identifier**    | 目标日志类型的 16 字节 UUID4。对于 Component State Dump Log，固定填入：<br>`b3fab4cf-01b6-4332-943e-5e9962f23567`23。 |
+| **10h**                | `4`          | **Offset**            | 欲读取日志数据的**起始字节偏移量**4。首次发起读取操作时必须传入 `0`5。 |
+| **14h**                | `4`          | **Length**            | 本次请求读取的**数据长度（字节数）**4。                      |
+
+
+
+5.2 输出载荷 (Output Payload - Table 8-85)
+
+| 字节偏移 (Byte Offset) | 长度 (Bytes)  | 字段名称 (Field Name) | 详细描述与取值 (Description & Value)                         |
+| ---------------------- | ------------- | --------------------- | ------------------------------------------------------------ |
+| **00h**                | 可变 (Varies) | **Log Data**          | 返回指定偏移量处的日志字节数据4。当从 `Offset = 0` 开始读取时，前 64 字节为标准头部格式6。 |
+
+
+
+Log Data 内部结构 (Table 8-89 Component State Dump Log Format)
+
+当从 `Offset = 0` 开始读取时，返回的 **Log Data** 前 64 字节（`0x00~0x3F`）为规范定义的标准 Header，`0x40` 偏移之后为厂商自定义的 Dump Payload 数据67：
+
+| 字节偏移 (Byte Offset) | 长度 (Bytes)  | 字段名称 (Field Name)                       | 详细描述与取值 (Description & Value)                         |
+| ---------------------- | ------------- | ------------------------------------------- | ------------------------------------------------------------ |
+| **00h**                | `4`           | **Component State Dump Data Length**        | `0x40` 偏移处厂商自定义数据（`Component State Dump Data`）的总字节长度6。 |
+| **04h**                | `1`           | **Auto Populate Trigger Count Since Clear** | 自上次执行 `Clear Log` 以来，设备因内部触发（如 Crash）自动生成 Dump 的次数8。填 `00h` 表示不支持计数，最大值饱和于 `FFh`8。 |
+| **05h**                | `1`           | **Event Log**                               | 指示关联事件记录所在的 Event Log 类型9（`00h`=Informational, `01h`=Warning, `02h`=Failure, `03h`=Fatal, `04h`=Dynamic Capacity）10。若无关联句柄则该字段未定义9。 |
+| **06h**                | `2`           | **Associated Event Record Handle**          | 与本次 Auto Populate 触发关联的 Event Record Handle9。无关联事件或事件已被清除时填 `0000h`9。 |
+| **08h**                | `8`           | **Timestamp**                               | 生成该 Dump 数据时的设备时间戳（自 UTC 1970-01-01 00:00:00 起经过的无符号纳秒数）711。 |
+| **10h**                | `10h` (16B)   | **Component State Dump Format UUID**        | **可选的数据格式标识 UUID**7。用于唯一标识 `Offset 40h` 处厂商自定义数据的具体结构格式；填全 `0` 表示未指定格式7。 |
+| **20h**                | `4`           | **Flags**                                   | **标志位**7：<br>• **Bit ** (`Auto Populate Data`)：`1` 表示该数据由 Auto Populate（如硬件/FW Crash 自动触发）生成；`0` 表示由 `Populate Log` 手动拉取生成或数据为空7。<br>• **Bits [31:1]**：保留 (Reserved)7。 |
+| **24h**                | `1Ch` (28B)   | **Reserved**                                | 保留字段7。                                                  |
+| **40h**                | 可变 (Varies) | **Component State Dump Data**               | **厂商自定义的 Dump 数据载荷**（Vendor Specific）7。         |
